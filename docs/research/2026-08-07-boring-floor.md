@@ -1,3 +1,10 @@
+> **[SUPERSEDED IN PART 2026-08-07]** The quarantine finding below — "WebKit
+> does not quarantine; `DownloadCocoa.mm` contains no quarantine code" — was
+> **measured to be false** on macOS 26.5. A raw `WKDownload` with no app code
+> and no Info.plist lands `com.apple.quarantine` on its own. Found by a mutation
+> canary, not by reading. See `docs/api-notes/quarantine.md` for the
+> measurement. The rest of this file stands.
+
 # Research — boring-floor
 
 **Date:** 2026-08-07  

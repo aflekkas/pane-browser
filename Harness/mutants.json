@@ -1,14 +1,27 @@
 [
-  {"id": "tabs.no_select_on_new",
-   "defect": "opening a tab does not select it",
-   "caught_by": "tabs.new_tab_is_selected"},
-  {"id": "tabs.reopen_is_noop",
-   "defect": "reopenLastClosed does nothing",
-   "caught_by": "tabs.close_then_reopen_restores"},
-  {"id": "lifecycle.discard_keeps_engine",
-   "defect": "discard marks the tab discarded but never releases the WKWebView",
-   "caught_by": "lifecycle.discard_releases_the_engine"},
-  {"id": "spaces.cycle_clamps",
-   "defect": "space cycling clamps at the ends instead of wrapping",
-   "caught_by": "spaces.cycle_wraps"}
+  {
+    "id": "tabs.no_select_on_new",
+    "defect": "opening a tab does not select it",
+    "caught_by": "tabs.new_tab_is_selected"
+  },
+  {
+    "id": "tabs.reopen_is_noop",
+    "defect": "reopenLastClosed does nothing",
+    "caught_by": "tabs.close_then_reopen_restores"
+  },
+  {
+    "id": "lifecycle.discard_keeps_engine",
+    "defect": "discard marks the tab discarded but never releases the WKWebView",
+    "caught_by": "lifecycle.discard_releases_the_engine"
+  },
+  {
+    "id": "spaces.cycle_clamps",
+    "defect": "space cycling clamps at the ends instead of wrapping",
+    "caught_by": "spaces.cycle_wraps"
+  },
+  {
+    "id": "security.trust_all_certs",
+    "defect": "server-trust challenges are accepted without evaluation",
+    "caught_by": "net.untrusted_cert_does_not_silently_load"
+  }
 ]

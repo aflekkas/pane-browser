@@ -85,6 +85,12 @@ public enum AuthChallengeHandler {
         guard let trust = challenge.protectionSpace.serverTrust else {
             return (.cancelAuthenticationChallenge, nil)
         }
+        // Mutant: accept everything. If the cert scenario cannot catch this,
+        // it is asserting nothing — and a negative assertion that never fires
+        // is the easiest kind to get wrong.
+        if Mutants.isActive("security.trust_all_certs") {
+            return (.useCredential, URLCredential(trust: trust))
+        }
         var error: CFError?
         if SecTrustEvaluateWithError(trust, &error) {
             return (.performDefaultHandling, nil)

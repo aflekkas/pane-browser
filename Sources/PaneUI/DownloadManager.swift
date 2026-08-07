@@ -5,22 +5,25 @@ import PaneCore
 
 /// spec §6 downloads.
 ///
-/// **Security-critical: quarantine.** The research corrected the spec here and
-/// the correction matters (`docs/research/2026-08-07-boring-floor.md`):
+/// **Security-critical: quarantine.** Measured, not assumed — and the
+/// measurement overturned both the spec AND the research
+/// (`docs/api-notes/quarantine.md`):
 ///
-/// - WebKit does **not** quarantine. `DownloadCocoa.mm` contains no quarantine
-///   code, so it will not happen for free from `WKDownload`.
-/// - LaunchServices does it, driven by `LSFileQuarantineEnabled` in Info.plist.
-///   `CoreTypes.bundle/Exceptions.plist` force-enables it for known browsers by
-///   bundle ID; a new bundle ID like Pane's is in neither list, so **without
-///   that flag Pane gets no quarantine at all** — a malware vector, exactly as
-///   the spec warned, just via a different mechanism than it described.
-/// - The flag alone does not attach provenance. `kLSQuarantineOriginURLKey` and
-///   `kLSQuarantineDataURLKey` are what produce Gatekeeper's "downloaded from"
-///   attribution, and those must be written here.
+/// - **`WKDownload` quarantines the file itself.** A raw `WKDownload` with no
+///   Pane code at all lands `com.apple.quarantine: 0283;…` on macOS 26.5. Both
+///   the spec ("set it yourself or you have built a malware vector") and the
+///   research ("WebKit does not quarantine; DownloadCocoa.mm has no such code")
+///   were wrong about this.
+/// - A plain `Data.write(to:)` gets **no** quarantine, so it is not blanket
+///   sandbox behaviour — it is specific to downloads.
+/// - `LSFileQuarantineEnabled` stays set in Info.plist regardless. It costs
+///   nothing, Safari sets it, and relying solely on undocumented WebKit
+///   behaviour for a security property would be careless.
 ///
-/// The supported API is the `NSURLQuarantinePropertiesKey` resource key, not
-/// `LSSetItemAttribute`.
+/// The call below is therefore **belt and braces for the xattr**, and its real
+/// intent is provenance — `kLSQuarantineOriginURLKey` / `DataURLKey`, which
+/// produce Gatekeeper's "downloaded from" attribution. That part does not work;
+/// see the api-note for three attempts and why not to try a fourth.
 @MainActor
 public final class DownloadManager: NSObject {
     public struct Item: Identifiable, Sendable {

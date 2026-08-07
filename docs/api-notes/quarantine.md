@@ -69,3 +69,49 @@ Do not try a fourth variation of `NSURLQuarantinePropertiesKey` — three are
 recorded above. Investigate instead whether the row must be written before the
 file is created, or whether `LSSetItemAttributes` (older, non-Swift) reaches the
 database when the resource key does not.
+
+---
+
+## CORRECTION 2026-08-07 (later): WKDownload quarantines the file itself
+
+Everything above about *who* applies the xattr was wrong, including the research
+it was based on. Measured directly:
+
+```swift
+// A raw WKDownload. No Pane code, no applyQuarantine, no Info.plist
+// (a bare binary, not a bundle).
+let dl = await webView.startDownload(using: request)
+// -> com.apple.quarantine: 0283;6a75c808;;
+//    keys: LSQuarantineIsOwnedByCurrentUser, LSQuarantineTimeStamp, LSQuarantineType
+```
+
+And the control, proving it is not blanket sandbox behaviour:
+
+```swift
+try Data("plain write".utf8).write(to: downloadsDir.appending("x.bin"))
+// -> quarantine ABSENT
+```
+
+**So `WKDownload` quarantines; a plain file write does not.** The research
+claim — "WebKit does not quarantine, `DownloadCocoa.mm` contains no quarantine
+code" — does not hold on macOS 26.5, whatever that file says.
+
+**How this was found.** A mutation canary. `downloads.no_quarantine` disabled
+Pane's own `applyQuarantine` and the gate stayed green — a gate passing for a
+reason other than the code it was testing. That is precisely the failure the
+canary exists to expose, and no amount of reading would have surfaced it.
+
+**Consequences:**
+
+- The mutant is **removed**, not "fixed". It is uncatchable by construction:
+  it disables code that is not the source of the property being asserted, and
+  an uncatchable mutant left in `mutants.json` fails the phase gate forever.
+- `LSFileQuarantineEnabled` **stays** in Info.plist. It costs nothing, Safari
+  sets it, and resting a security property solely on undocumented WebKit
+  behaviour would be careless.
+- `applyQuarantine` **stays**, but is now honestly documented as belt-and-braces
+  for the xattr whose real purpose — provenance — does not work.
+- The gate's assertion stands unchanged. It verifies the **user-facing security
+  property** (Gatekeeper will prompt), which is true regardless of which layer
+  provides it. It does **not** verify that Pane's own code provides it, and it
+  should not be read as doing so.

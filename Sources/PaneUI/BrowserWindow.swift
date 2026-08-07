@@ -804,5 +804,6 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
     public var selectedTabID: TabID? { model.selected }
     public var selectedURL: URL? { model.selectedTab?.url ?? currentEngine?.currentURL }
     public var currentSpaceName: String? { spaceModel.currentSpace?.name }
+    public var selectedPageTitle: String? { currentEngine?.title }
     public func tabCount(ofKind kind: TabKind) -> Int { model.section(kind).count }
 }

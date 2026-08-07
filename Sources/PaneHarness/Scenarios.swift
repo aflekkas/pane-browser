@@ -14,8 +14,15 @@ import PaneUI
 @MainActor
 public enum Scenarios {
 
+    nonisolated(unsafe) static var fixtures: Fixtures?
+
     public static func runAll(json: Bool) async -> Int32 {
         var results: [(String, Int, [String], Double)] = []
+
+        let fx = Fixtures()
+        if await fx.start() { fixtures = fx }
+        else { FileHandle.standardError.write(Data("fixtures: server did not start\n".utf8)) }
+        defer { fx.stop() }
 
         for (name, body) in all {
             let e = Expect(name)
@@ -134,6 +141,57 @@ public enum Scenarios {
                        "going back from the first space wraps to the last, it does not clamp")
                 c.dispatch(.nextSpace)
                 e.equal(c.currentSpaceName, first, "and forward returns")
+            }),
+
+            ("net.auth_challenge_is_answered", { e in
+                guard let base = fixtures?.baseURL else {
+                    e.that(false, "fixture server unavailable"); return
+                }
+                // The fixture returns 401 then 200 with the right credentials.
+                // Pane cancels rather than prompting in an unattended run, so
+                // what this asserts is that the challenge REACHES the delegate
+                // and the load resolves rather than hanging — the silent
+                // rejectProtectionSpace default is the bug being guarded.
+                let c = fresh()
+                c.dispatch(.newTab(kind: .ephemeral))
+                c.dispatch(.navigate(base.appendingPathComponent("auth").absoluteString))
+                try? await Task.sleep(for: .seconds(3))
+                e.that(c.selectedURL != nil, "the navigation resolved instead of hanging")
+            }),
+
+            ("net.attachment_becomes_a_download", { e in
+                guard let base = fixtures?.baseURL else {
+                    e.that(false, "fixture server unavailable"); return
+                }
+                let c = fresh()
+                c.dispatch(.newTab(kind: .ephemeral))
+                c.dispatch(.navigate(base.appendingPathComponent("download/scn.bin").absoluteString))
+                var sawDownload = false
+                for _ in 0..<24 {
+                    try? await Task.sleep(for: .milliseconds(250))
+                    if !c.downloads.items.isEmpty { sawDownload = true; break }
+                }
+                e.that(sawDownload, "Content-Disposition: attachment routes to WKDownload")
+                if let dest = c.downloads.items.first?.destination {
+                    try? FileManager.default.removeItem(at: dest)
+                }
+            }),
+
+            ("net.untrusted_cert_does_not_silently_load", { e in
+                guard let tls = fixtures?.tlsURL else {
+                    e.that(false, "fixture TLS server unavailable"); return
+                }
+                // The fixture serves a self-signed cert for a name that does not
+                // match. The page must NOT load: silently accepting bad TLS is
+                // the worst possible failure here, so the assertion is that it
+                // did not happen.
+                let c = fresh()
+                c.dispatch(.newTab(kind: .ephemeral))
+                c.dispatch(.navigate(tls.absoluteString))
+                try? await Task.sleep(for: .seconds(4))
+                let loaded = c.selectedURL?.host == "127.0.0.1"
+                    && c.selectedPageTitle?.isEmpty == false
+                e.that(!loaded, "an untrusted certificate does not load silently")
             }),
 
             ("nav.address_bar_resolves_search_vs_host", { e in
