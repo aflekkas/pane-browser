@@ -178,6 +178,12 @@ Essentials never discard below thumbnail state and always restore to their pinne
 
  A `List` with 200 rows and drag reordering will stutter, and the sidebar is the one surface where stutter is unforgivable.
 
+**Discarded tabs are visibly distinct.** A discarded row dims and swaps its
+favicon for a sleep glyph. Added 2026-08-07: the memory behaviour in §4 is the
+product's central claim, and a claim the user cannot see is one they cannot
+believe. This is the only affordance for it — there is no memory readout, no
+settings toggle, no statistics panel.
+
 Three sections, no headers, separated by spacing:
 - **Essentials** (icon grid, 4 per row)
 - **Pinned** (list)
