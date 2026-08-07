@@ -294,3 +294,45 @@ it, which trains people to ignore the rule — it now strips comments first.
 
 **Next:** the fixture server (needed to test auth / cert / crash paths), the
 per-space context submenu, and the 200-row scroll measurement.
+
+## 2026-08-07 (to 18:00) — session close
+
+**State at close.** Full `gate.sh phase` green: 98 unit assertions, 10
+scenarios, 5/5 mutants caught, restore p50 82ms, discard and isolation passing.
+25 commits, CI green, installed at /Applications/Pane.app and running at 31MB.
+
+**The most important thing that happened today** was the mutation canary
+overturning a research finding. `downloads.no_quarantine` disabled Pane's own
+`applyQuarantine` and the download gate stayed **green** — a gate passing for a
+reason other than the code it was testing. Measuring directly showed
+`WKDownload` quarantines the file itself on macOS 26.5, which contradicts both
+the spec and the adversarially-verified research that said WebKit does not.
+
+That is the argument for the canary in one incident. Nothing about reading the
+code, the docs, or the research would have surfaced it; only planting a defect
+and demanding failure did.
+
+It also found two of its own problems the same day: a stale binary that made
+all four mutants appear to escape, and a `spaces.cycle_wraps` scenario that was
+vacuous because it started on the last space, where clamping and wrapping are
+indistinguishable.
+
+**Uncatchable mutants get removed, not fixed.** `downloads.no_quarantine`
+disables code that is not the source of the asserted property. Leaving it in
+would fail the phase gate forever and teach the next session to ignore the
+canary.
+
+**Open, in priority order:**
+1. Visual golden automation — still unsolved after five approaches
+   (`docs/api-notes/appkit.md`). Every UI-parity tick is a manual look until
+   this works, and `gate.sh` says so under "NOT proven by this run".
+2. 200-row sidebar scroll measurement — the §5 claim that AppKit beats SwiftUI
+   here is asserted and not measured.
+3. Downloads panel is an `NSAlert`, not the `NSPopover` §6 describes; no
+   Dock-tile progress.
+4. Milestone F — credential vault, then passkeys (entitlement needs an
+   organization Apple Developer account, ADR 0004).
+5. Milestone G — glass, deliberately last.
+
+**Do not** start G before 1–3 are done. Wanting to build the glass is the
+signal that the plumbing is unfinished, and that rule has held all day.
