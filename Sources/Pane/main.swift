@@ -11,6 +11,20 @@ if args.contains("--selftest") {
     exit(Harness.runSelfTest())
 }
 
+// Milestone A's gate. Needs a real run loop, so it drives NSApplication rather
+// than running as a plain CLI.
+if args.contains("--bench-restore") {
+    let app = NSApplication.shared
+    app.setActivationPolicy(.accessory)
+    let fixture = URL(fileURLWithPath: "Fixtures/bench-page.html").standardizedFileURL
+    let n = args.firstIndex(of: "--iterations").map { Int(args[$0 + 1]) ?? 20 } ?? 20
+    Task { @MainActor in
+        let code = await Bench.restore(iterations: n, fixture: fixture)
+        exit(code)
+    }
+    app.run()
+}
+
 let app = NSApplication.shared
 app.setActivationPolicy(.regular)
 let delegate = AppDelegate()

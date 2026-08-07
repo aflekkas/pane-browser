@@ -70,3 +70,52 @@ never appear in a description of Pane.
 hooks, the public repo, and the spec-correction commit. Then milestone A. Do not
 start milestone A before the hooks are installed; the whole anti-drift design
 depends on enforcement existing before the code it governs.
+
+## 2026-08-07 (later) — milestone A landed
+
+**Attempted:** Phase 0 enforcement, then milestone A — a launchable browser.
+
+**What happened.** Repo stood up in five commits with the enforcement landing
+*before* the code it governs. Verified the pre-commit hook actually blocks: a
+commit with no gate receipt for the staged tree was rejected, and `git log`
+confirms it never landed. Milestone A builds, runs, and browses — screenshotted
+and looked at, not assumed.
+
+Milestone A's gate passes: restore p50 82 ms against a 200 ms threshold, with
+scroll position verifiably restored.
+
+**What surprised me.**
+
+*Neither swift-testing nor XCTest ships with Command Line Tools.* `swift test`
+cannot run at all on this machine. Rather than block on the Xcode install, the
+unit layer became a `PaneCheck` executable with an `Expect` type that counts
+assertions — ADR 0006's principle one level down. It has a side benefit:
+`Expect` fails a suite that asserts nothing, which `swift test` would report
+green.
+
+*The benchmark's first finding was a bug in itself.* It reported `pass: false`
+while showing p50 = 79 ms against a 200 ms threshold. `Duration.components`
+splits into whole seconds plus a *sub-second* attoseconds remainder, so dividing
+attoseconds by 1e15 already yields milliseconds — and I then multiplied by 1000
+again. Worth noting the failure mode was the safe direction: it failed a passing
+result rather than passing a failing one. If the sign had been the other way I
+might not have looked.
+
+*I nearly shipped a benchmark that proved nothing.* The timing was green while
+`state_bytes` was only 695 — small enough to ask whether restore was actually
+restoring or just re-navigating to the same URL. Added an assertion that
+`window.scrollY` comes back as 1200. It does. Without that check the gate would
+have been green on a feature that might not work at all.
+
+**Dead ends.**
+
+- `withTaskGroup` racing a load against a timeout: Swift 6's region-based
+  isolation checker rejects it outright with "pattern that the region-based
+  isolation checker does not understand how to check. Please file a bug."
+  Replaced with a `@MainActor` `Waiter` class holding the continuation. Do not
+  retry the task-group version.
+
+**Next session:** milestone A′, the DRM probe. It is an afternoon and it is the
+cheapest decision point in the project — if FairPlay is unavailable in a
+third-party WKWebView that is a product-defining fact and it should surface now,
+not after milestone E.

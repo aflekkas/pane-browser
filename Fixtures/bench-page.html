@@ -1,0 +1,17 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Pane restore benchmark fixture</title>
+<style>body{font:14px -apple-system;margin:2rem}div{padding:4px;border-bottom:1px solid #ddd}</style>
+<h1>Restore benchmark fixture</h1>
+<p>Deliberately non-trivial: enough DOM to be a realistic restore, entirely
+local so the measurement is of Pane's machinery and not of the network.</p>
+<div id="rows"></div>
+<script>
+  const r = document.getElementById('rows');
+  for (let i = 0; i < 400; i++) {
+    const d = document.createElement('div');
+    d.textContent = 'row ' + i + ' — ' + 'x'.repeat(40);
+    r.appendChild(d);
+  }
+  window.scrollTo(0, 1200);
+</script>

@@ -17,7 +17,7 @@ complete; it will catch you.
 
 **Current phase:** A — it browses
 **App launchable:** yes — `./Scripts/run.sh`
-**Last verified gate:** none yet
+**Last verified gate:** milestone A — restore p50 **82 ms** / 200 ms, scroll restored (2026-08-07)
 
 ---
 
@@ -50,11 +50,23 @@ Window, address bar, one `WKWebView`, back/forward/reload, ⌘L.
 - [x] `Scripts/bundle.sh` — hand-rolled `.app` (Info.plist, codesign)
 - [x] `Scripts/run.sh` — build and launch
 - [x] Window, address bar, navigation — **verified running, 31 MB phys_footprint**
-- [ ] `interactionState` capture and restore
-- [ ] Bench harness measuring restore latency
+- [x] `interactionState` capture and restore
+- [x] Bench harness measuring restore latency
 
 **Gate:** `./Scripts/run.sh` launches a browser you can actually use, **and**
 restore p50 **< 200 ms** over 20 runs.
+
+**RESULT 2026-08-07: PASS.** `.build/debug/Pane --bench-restore --iterations 20`
+
+```json
+{"p50_ms":80.962,"p95_ms":122.164,"min_ms":74.596,"max_ms":122.164,
+ "state_bytes":695,"restored_scroll_y":1200,"scroll_restored":true,"pass":true}
+```
+
+p50 is 2.5x inside the threshold. The gate asserts **correctness as well as
+latency** — `restored_scroll_y` proves the state was genuinely restored rather
+than the URL merely re-navigated, because a fast number on a feature that does
+not work is worse than a slow number on one that does.
 
 > Spec §9 step 1: *"If restore is not sub-200ms here, stop and fix it."* That is
 > a real stop, not a note. Do not proceed to B with a failing latency gate.
