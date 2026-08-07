@@ -30,8 +30,11 @@ if [ -f Package.swift ]; then
   step "build"
   swift build -c debug 2>&1 | tail -20 || FAIL=1
 
-  step "unit tests (PaneCore — pure logic, no AppKit)"
-  swift test --filter PaneCoreTests 2>&1 | tail -20 || FAIL=1
+  step "unit checks (PaneCore — pure logic, no AppKit)"
+  # Not `swift test`: neither swift-testing nor XCTest ships with the Command
+  # Line Tools, and tying the gate to a full Xcode install would mean the agent
+  # cannot verify its own work on a bare machine. See docs/api-notes/toolchain.md.
+  .build/debug/PaneCheck || FAIL=1
 fi
 
 if [ "$MODE" = phase ] && [ -f .build/debug/Pane ]; then

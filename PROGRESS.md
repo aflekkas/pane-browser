@@ -15,8 +15,8 @@ complete; it will catch you.
 
 ## Status
 
-**Current phase:** 0 — repo and enforcement
-**App launchable:** not yet (target: end of milestone A)
+**Current phase:** A — it browses
+**App launchable:** yes — `./Scripts/run.sh`
 **Last verified gate:** none yet
 
 ---
@@ -30,11 +30,11 @@ which drift is possible.
 - [x] Spec committed verbatim as `docs/pane-browser-spec.md`
 - [x] All 14 research reports committed with citations and refutations
 - [x] `CLAUDE.md` — reorientation procedure, invariants, delegation doctrine
-- [ ] `PROGRESS.md`, `docs/journal.md`, `docs/budget.md`
-- [ ] ADRs 0001–0006 seeded from research
-- [ ] `Scripts/check-scope.sh`, `Scripts/gate.sh`, git hooks, CI
-- [ ] Public repo created and pushed
-- [ ] Spec-correction commit applying research findings
+- [x] `PROGRESS.md`, `docs/journal.md`, `docs/budget.md`
+- [x] ADRs 0001–0006 seeded from research
+- [x] `Scripts/check-scope.sh`, `Scripts/gate.sh`, git hooks, CI
+- [x] Public repo created and pushed
+- [x] Spec-correction commit applying research findings
 
 **Gate:** `./Scripts/gate.sh pre` passes on a clean tree, the pre-commit hook
 rejects a commit with no receipt, and CI is green on GitHub.
@@ -46,10 +46,10 @@ rejects a commit with no receipt, and CI is green on GitHub.
 Window, address bar, one `WKWebView`, back/forward/reload, ⌘L.
 `interactionState` save and restore.
 
-- [ ] `Package.swift` — `PaneCore` / `PaneWeb` / `PaneUI` / `PaneHarness` / `Pane`
-- [ ] `Scripts/bundle.sh` — hand-rolled `.app` (Info.plist, codesign, entitlements)
-- [ ] `Scripts/run.sh` — build and launch
-- [ ] Window, address bar, navigation
+- [x] `Package.swift` — `PaneCore` / `PaneWeb` / `PaneUI` / `PaneHarness` / `Pane` / `PaneCheck`
+- [x] `Scripts/bundle.sh` — hand-rolled `.app` (Info.plist, codesign)
+- [x] `Scripts/run.sh` — build and launch
+- [x] Window, address bar, navigation — **verified running, 31 MB phys_footprint**
 - [ ] `interactionState` capture and restore
 - [ ] Bench harness measuring restore latency
 
