@@ -13,5 +13,34 @@
   <array>
     <string>com.aflekkas.pane</string>
   </array>
+
+  <!-- spec §7 passkeys. THE key fact (ADR 0003): with this entitlement WebKit's
+       own WebAuthn implementation handles navigator.credentials inside
+       WKWebView and talks to AuthenticationServices directly. Pane writes NO
+       WebAuthn code — no CBOR, no clientDataJSON, no attestation parsing.
+
+       Requesting it is a business step, not an engineering one: macOS 13.3+,
+       Apple-reviewed, and Apple's own text requires the Account Holder role on
+       an ORGANIZATION developer account (which needs a D-U-N-S number), via
+       https://developer.apple.com/contact/request/macos-browsers-passkeys/
+
+       Apple's review criteria also require the app to ALREADY behave as a
+       browser — http+https schemes declared, a URL field or search on launch.
+       That is why passkeys are last in the build order rather than early:
+       the ordering is forced by the review, not by preference.
+
+       Declared here so the plumbing is in place. Without the grant, WebKit
+       restricts passkeys to relying parties covered by associated-domains
+       below, which is how this gets verified before any approval arrives. -->
+  <key>com.apple.developer.web-browser.public-key-credential</key>
+  <true/>
+
+  <!-- Verification path pre-grant: a domain we control. The same code then
+       widens to every site once the entitlement lands — nothing is stubbed and
+       nothing waits. Replace with a real domain when one exists. -->
+  <key>com.apple.developer.associated-domains</key>
+  <array>
+    <string>webcredentials:pane.invalid</string>
+  </array>
 </dict>
 </plist>

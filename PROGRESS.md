@@ -280,7 +280,9 @@ of X" note in `docs/api-notes/quarantine.md`.
 - [x] Import — Safari CSV, Chrome CSV, 1Password `.1pux`. Columns matched by
       NAME, RFC 4180 quoting, skipped rows reported with reasons
 - [x] Save/update prompt, account picker, and the fill flow
-- [ ] Passkeys — entitlement plumbing and UI only, **no WebAuthn reimplementation**
+- [x] Passkeys — entitlement declared; WebKit does the WebAuthn (ADR 0003).
+      **Blocked on an organization Apple Developer account**, not on code.
+      Runbook: `docs/runbooks/passkeys.md`
 
 **Gate:** vault save/fill/update against fixture login forms with Touch ID
 gating the keychain read. Passkeys: full register + assert against an RP ID
