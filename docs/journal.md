@@ -247,3 +247,50 @@ Default search and home page set to Google.
 **Still open:** visual golden automation (see the previous entry), essentials
 still render as a placeholder glyph rather than favicons, and the `moon.zzz`
 discarded-tab indicator remains unspecced pending Alex's call.
+
+## 2026-08-07 (afternoon) — floor, parity, and a harness that can fail
+
+**What happened.** Milestone E's floor landed, the sidebar reached most of Arc
+parity, and the scenario harness went in with a working mutation canary. Full
+`gate.sh phase` is green: 98 unit assertions, 7 scenarios, 4/4 mutants caught,
+restore p50 83ms, discard and isolation both passing.
+
+**The canary justified itself immediately, twice.**
+
+First run reported all four mutants "escaped". The build had actually failed, so
+`--mutate` never armed and I was running a stale binary — a false green that
+looks exactly like a working suite.
+
+Then `spaces.cycle_wraps` turned out to be **vacuous**. It started on the last
+space, where clamping and wrapping land in the same place, so the clamp mutant
+passed straight through. Rewritten to cycle back to the first space first.
+Neither problem would have surfaced without planting a defect and demanding
+failure.
+
+**Read Zen's actual CSS** rather than guessing from screenshots, at Alex's
+suggestion. Its numbers are now Pane's: `--border-radius-medium` 10px,
+`--tab-min-height` 28px regular / 44px essentials, workspace strip 28px with a
+3px gap. Pane's 28pt row pitch had been arrived at independently and was
+already right. The essentials grid is auto-fit with a percentage minimum, so it
+reflows the column count rather than squashing a fixed four into pills — Pane
+now does the same.
+
+**Favicons were in-memory only** — Alex caught it. Every launch re-fetched, so a
+restored session showed a column of grey globes filling in over a second while
+the network was hit for icons already known. Spec §2 had called for a
+content-addressed blob directory; it exists now, warmed in one pass at launch.
+
+**Quarantine, three attempts, unresolved for provenance.** The xattr lands and
+Gatekeeper prompts — that is the security property and it holds. The provenance
+URLs live in the LaunchServices events database rather than the xattr, and three
+approaches failed to populate them. Stopped at three per the escalation rule.
+Arc's own rows are empty too. `docs/api-notes/quarantine.md` says explicitly not
+to try a fourth variation and what to investigate instead.
+
+**Also caught myself twice:** the `moon.zzz` discarded indicator was unspecced,
+so it went into §5 rather than being quietly kept; and `check-scope.sh` failed
+on the word `loadHTMLString` appearing in a comment explaining why we never use
+it, which trains people to ignore the rule — it now strips comments first.
+
+**Next:** the fixture server (needed to test auth / cert / crash paths), the
+per-space context submenu, and the 200-row scroll measurement.

@@ -33,6 +33,7 @@ public final class SidebarController: NSViewController {
     public var onRenameSpace: ((String, String) -> Void)?
     public var onSetSpaceIcon: ((String, String?) -> Void)?
     public var onSetSpaceAccent: ((String, Int?) -> Void)?
+    public var onMoveTabToSpace: ((TabID, String) -> Void)?
     public var onDeleteSpace: ((String) -> Void)?
     public var onSelect: ((TabID) -> Void)?
     public var onClose: ((TabID) -> Void)?
@@ -228,6 +229,10 @@ public final class SidebarController: NSViewController {
                 .foregroundColor: isCurrent ? NSColor.labelColor : NSColor.secondaryLabelColor,
             ])
             b.identifier = NSUserInterfaceItemIdentifier(sp.id)
+            // spec §5 — a space pill is a drop target, so a tab can be moved
+            // between spaces by dragging it onto one.
+            b.registerForDraggedTypes([Self.tabUTI])
+            b.onTabDropped = { [weak self] tabID in self?.onMoveTabToSpace?(tabID, sp.id) }
             spaceBar.addArrangedSubview(b)
         }
         let plus = NSButton(title: "+", target: self, action: #selector(newSpaceTapped))
@@ -579,6 +584,35 @@ extension SidebarController: NSOutlineViewDelegate {
 final class SpaceButton: NSButton {
     var spaceID: String?
     var onContextMenu: (() -> Void)?
+    var onTabDropped: ((TabID) -> Void)?
+    private var isDropTarget = false { didSet { needsDisplay = true } }
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        guard sender.draggingPasteboard.string(forType: SidebarController.tabUTI) != nil else {
+            return []
+        }
+        isDropTarget = true
+        return .move
+    }
+
+    override func draggingExited(_ sender: NSDraggingInfo?) { isDropTarget = false }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        isDropTarget = false
+        guard let raw = sender.draggingPasteboard.string(forType: SidebarController.tabUTI),
+              let uuid = UUID(uuidString: raw) else { return false }
+        onTabDropped?(TabID(uuid))
+        return true
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        guard isDropTarget else { return }
+        NSColor.controlAccentColor.setStroke()
+        let p = NSBezierPath(roundedRect: bounds.insetBy(dx: 1, dy: 1), xRadius: 10, yRadius: 10)
+        p.lineWidth = 2
+        p.stroke()
+    }
 
     override func rightMouseDown(with event: NSEvent) { onContextMenu?() }
 

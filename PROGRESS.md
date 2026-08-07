@@ -15,9 +15,18 @@ complete; it will catch you.
 
 ## Status
 
-**Current phase:** E — the boring floor
+**Current phase:** E complete; polish and Arc parity (docs/ui-parity.md)
 **App launchable:** yes — `./Scripts/run.sh`
-**Last verified gate:** milestone D — profile isolation PASS; E — download quarantine PASS (2026-08-07)
+**Last verified gate:** full `./Scripts/gate.sh phase` — **all green** (2026-08-07)
+
+```
+unit checks        33 suites, 98 assertions, 0 failed
+scenarios          7 scenarios, 15 assertions, 0 failed
+mutation canary    4/4 mutants caught
+restore latency    p50 83ms / 200ms, scroll restored
+discard memory     PASS
+profile isolation  PASS
+```
 
 ---
 
@@ -126,12 +135,14 @@ Passing:
   bar showing the previous tab's page. See `docs/api-notes/appkit.md`.
 
 **Not yet done — this is what blocks the phase:**
+- [x] Drag reorder survives relaunch — persistence landed in milestone C
+- [x] Scenario harness: 7 end-to-end scenarios through the command bus, with a
+      mutation canary proving the suite can actually fail
 - [ ] Visual golden automation. In-app capture cannot photograph the sidebar at
       all (`NSScrollView` is layer-backed; `cacheDisplay` skips it). Five
       approaches tried and recorded in `docs/api-notes/appkit.md`. Until this
       works, `gate.sh` must keep listing visual goldens under "NOT proven".
 - [ ] 200-row scroll performance measurement
-- [ ] Drag reorder survives relaunch — needs session persistence (milestone C)
 
 > Correction folded in: `NSOutlineViewDiffableDataSource` does not exist.
 > See `docs/research/2026-08-07-architecture.md`.
@@ -235,13 +246,15 @@ of X" note in `docs/api-notes/quarantine.md`.
   impossible with public API. Uses `NSTextFinder` instead.
 
 **Still outstanding in this phase:**
-- [ ] Downloads panel is an `NSAlert` rather than the `NSPopover` §6 describes,
-      and there is no Dock-tile progress
-- [ ] Cert interstitial is an alert sheet, not the full-content-area interstitial
-      with an "Advanced" chain disclosure §6 describes
-- [ ] Context menu has "Open in New Tab" but not the per-space submenu, which §6
-      calls the thing that makes multi-space usable
-- [ ] No automated test yet for auth / cert / crash paths
+- [x] Cert interstitial is now the full-content-area AppKit view §6 describes,
+      red/amber by severity with an "Advanced" chain disclosure
+- [x] Downloads indicator in the sidebar footer, appearing only when relevant
+- [x] Cross-space tab drag with the profile warning §5 requires
+- [ ] Downloads panel is still an `NSAlert` rather than an `NSPopover`; no
+      Dock-tile progress
+- [ ] Context menu has "Open in New Tab" but not the per-space submenu
+- [ ] No automated test yet for auth / cert / crash paths (they need the
+      fixture server, which is not built)
 
 ---
 

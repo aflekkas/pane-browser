@@ -246,6 +246,38 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
             model.select(keep, at: Date())
             showSelected()
 
+        case .moveTabToSpace(let tabID, let targetSpace):
+            guard targetSpace != spaceID, let tab = model[tabID] else { return }
+            // spec §5 — warn when the target space has a DIFFERENT profile,
+            // because session state does not transfer: the tab arrives logged
+            // out, and finding that out by surprise is worse than a dialog.
+            let sourceProfile = spaceModel.spaces.first { $0.id == spaceID }?.profileID
+            let targetProfile = spaceModel.spaces.first { $0.id == targetSpace }?.profileID
+            if sourceProfile != targetProfile {
+                let alert = NSAlert()
+                alert.messageText = "Move to a different profile?"
+                alert.informativeText = "“\(tab.displayName)” will reload in the other space's "
+                    + "profile. Cookies and logins do not transfer, so you may be signed out there."
+                alert.addButton(withTitle: "Move")
+                alert.addButton(withTitle: "Cancel")
+                // App-modal rather than a sheet: the decision must be made
+                // before the move proceeds, and a sheet would need the whole
+                // command to become async for one confirmation.
+                guard alert.runModal() == .alertFirstButtonReturn else { return }
+            }
+            // Carry the URL, not the interactionState: that blob belongs to the
+            // source profile's session and is meaningless in another.
+            let carried = Tab(kind: tab.kind, url: tab.url, title: tab.title,
+                              homeURL: tab.homeURL, lastActiveAt: Date())
+            teardown(tabID)
+            model.close(tabID)
+            let previous = spaceID
+            spaceModel.select(targetSpace)
+            model.open(carried, select: false)
+            spaceModel.select(previous)
+            showSelected()
+            sidebar.spaces = spaceModel
+
         case .deleteSpace(let id):
             guard spaceModel.spaces.count > 1 else { return }
             spaceModel.removeSpace(id)
@@ -308,6 +340,7 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
         sidebar.onRenameSpace = { [weak self] id, name in self?.dispatch(.renameSpace(id, name)) }
         sidebar.onSetSpaceIcon = { [weak self] id, sym in self?.dispatch(.setSpaceIcon(id, sym)) }
         sidebar.onSetSpaceAccent = { [weak self] id, i in self?.dispatch(.setSpaceAccent(id, i)) }
+        sidebar.onMoveTabToSpace = { [weak self] t, s in self?.dispatch(.moveTabToSpace(t, s)) }
         sidebar.onDeleteSpace = { [weak self] in self?.dispatch(.deleteSpace($0)) }
         sidebar.onNewTab = { [weak self] in self?.dispatch(.newTab(kind: .ephemeral)) }
         sidebar.onShowDownloads = { [weak self] in self?.showDownloadsPanel() }

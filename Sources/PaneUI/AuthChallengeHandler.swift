@@ -252,3 +252,4 @@ public final class CertExceptions {
 
     public func clear() { allowed.removeAll() }
 }
+

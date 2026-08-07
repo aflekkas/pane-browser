@@ -36,6 +36,8 @@ public enum Command: Equatable, Sendable {
     case copyTabURL(TabID)
     case duplicateTab(TabID)
     case closeOtherTabs(TabID)
+    /// spec §5 — drag a tab onto another space's pill.
+    case moveTabToSpace(TabID, String)
     /// spec §4 — force the discard sweep now rather than waiting for the timer.
     /// Exists so the benchmark and scenarios can exercise discard deterministically.
     case sweepDiscardable
