@@ -20,6 +20,7 @@ let package = Package(
         .executableTarget(name: "Pane", dependencies: ["PaneUI", "PaneHarness"]),
         // Dependency-free unit checks. Neither swift-testing nor XCTest ships
         // with the Command Line Tools; see docs/api-notes/toolchain.md.
+        .executableTarget(name: "paneshot"),
         .executableTarget(name: "PaneCheck", dependencies: ["PaneCore", "PaneHarness"]),
     ]
 )

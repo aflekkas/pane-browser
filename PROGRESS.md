@@ -138,10 +138,13 @@ Passing:
 - [x] Drag reorder survives relaunch — persistence landed in milestone C
 - [x] Scenario harness: 7 end-to-end scenarios through the command bus, with a
       mutation canary proving the suite can actually fail
-- [ ] Visual golden automation. In-app capture cannot photograph the sidebar at
-      all (`NSScrollView` is layer-backed; `cacheDisplay` skips it). Five
-      approaches tried and recorded in `docs/api-notes/appkit.md`. Until this
-      works, `gate.sh` must keep listing visual goldens under "NOT proven".
+- [x] **Visual golden automation: SOLVED** on the seventh approach, after
+      escalating to a stronger model per the two-strike rule. `Capture.composite`
+      needs no TCC grant and no activation. Root cause was subtler than the
+      working theory: `cacheDisplay` *samples* composited layer contents rather
+      than re-drawing, so an unattended window has nothing to sample —
+      `displayIgnoringOpacity` re-draws. Full write-up, including the six
+      failures, in `docs/api-notes/appkit.md`.
 - [x] **200-row scroll: PASS.** p50 3.0ms, p95 4.7ms against an 8ms half-frame
       budget. Result in `docs/research/2026-08-07-sidebar-scroll-result.md`.
       Note it establishes "AppKit is fast enough", NOT "faster than SwiftUI" —

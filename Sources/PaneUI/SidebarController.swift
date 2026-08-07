@@ -75,10 +75,11 @@ public final class SidebarController: NSViewController {
     public override func loadView() {
         view = NSView()
         // Flat fill via an NSBox rather than `wantsLayer` + a layer background:
-        // cacheDisplay does not traverse layer-backed subviews, so making this
-        // view layer-backed renders the whole sidebar blank in captures
-        // (docs/api-notes/appkit.md). Glass is milestone G, deliberately last —
-        // wanting to build it now is the signal that the plumbing is unfinished.
+        // the golden capture re-draws the hierarchy with displayIgnoringOpacity,
+        // which renders draw(_:) but not bare layer properties — a layer-only
+        // background would vanish from captures (docs/api-notes/appkit.md).
+        // Glass is milestone G, deliberately last — wanting to build it now is
+        // the signal that the plumbing is unfinished.
         let backing = NSBox()
         backing.boxType = .custom
         backing.borderWidth = 0
@@ -531,7 +532,7 @@ extension SidebarController: NSOutlineViewDelegate {
             // Zen: essentials tiles are --tab-min-height 44px. Fixed height,
             // with the COLUMN COUNT reflowing instead — see zen-metrics.md.
             return 44 + 8
-        case .tab:           return 28
+        case .tab:           return 28         // Zen --tab-min-height (regular)
         }
     }
 

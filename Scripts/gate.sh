@@ -62,6 +62,9 @@ if [ "$MODE" = phase ] && [ -f .build/debug/Pane ]; then
   step "discard reclaims memory (spec §4)"
   ./Scripts/bench-discard.sh 6 || FAIL=1
 
+  step "visual goldens (spec §5)"
+  ./Scripts/visual.sh check || FAIL=1
+
   step "sidebar scroll at 200 rows (spec §5)"
   .build/debug/Pane --bench-scroll --rows 200 || FAIL=1
 
@@ -83,7 +86,7 @@ cat <<'EOF'
 EOF
 [ "$MODE" = pre ] && cat <<'EOF'
   - visual goldens (phase gate only)
-  - memory and restore-latency thresholds (phase gate only)
+  - memory, restore-latency and scroll thresholds (phase gate only)
   - mutation canary (phase gate only)
 EOF
 

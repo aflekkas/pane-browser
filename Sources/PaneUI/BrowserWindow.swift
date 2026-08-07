@@ -819,6 +819,16 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
     public var selectedURL: URL? { model.selectedTab?.url ?? currentEngine?.currentURL }
     public var currentSpaceName: String? { spaceModel.currentSpace?.name }
     public var selectedPageTitle: String? { currentEngine?.title }
+
+    /// Adds a row with a fixed title and NO engine, for hermetic visual
+    /// goldens. Bypasses the command bus deliberately: dispatching .newTab
+    /// would navigate, and a golden that loads a page is not deterministic.
+    public func addGoldenTab(kind: TabKind, title: String) {
+        var t = Tab(kind: kind, url: nil, title: title, lastActiveAt: Date())
+        t.lifecycle = .discarded          // no engine, so no rendering variance
+        model.open(t, select: false)
+        sidebar.model = model
+    }
     /// Exposed for the §5 scroll benchmark only.
     public var sidebarOutlineViewForBench: NSOutlineView? { sidebar.outlineViewForBench }
     public func tabCount(ofKind kind: TabKind) -> Int { model.section(kind).count }

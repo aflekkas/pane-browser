@@ -67,7 +67,18 @@ The reference measurements live in `docs/arc-sidebar.md`. When adding
 to this list, measure off a real screenshot and record the number there first —
 "looks about right" is how a UI drifts a pixel at a time.
 
-Note the honest constraint from `docs/api-notes/appkit.md`: automated visual
-goldens do not work yet, because `cacheDisplay` cannot capture layer-backed
-`NSScrollView` content. Until that is solved, every tick on this list means a
-human-equivalent check — capture the screen with Pane frontmost and *look*.
+**Automated visual goldens now work** (`./Scripts/visual.sh check`, wired into
+`gate.sh phase`). They use `Capture.composite` — `displayIgnoringOpacity` for
+chrome plus `WKWebView.takeSnapshot` for content — which needs no Screen
+Recording permission and no window activation. Seven approaches are recorded in
+`docs/api-notes/appkit.md`; six of them failed.
+
+The golden scene is **hermetic**: fixed titles, no navigation, no favicon
+fetches. The demo seed was unusable because titles and icons arrive from the
+network at different times each run, so the golden failed against itself — and
+a check that cries wolf is one people learn to ignore. The diff is scoped to
+the sidebar region for the same reason: the content area shows a live
+third-party page.
+
+Verified capable of failing: a 2pt→12pt row-height change moves the ratio from
+0.0002 to 0.0934. Run-to-run noise is ~0.02%, against a 0.2% threshold.

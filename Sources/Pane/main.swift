@@ -75,6 +75,7 @@ let app = NSApplication.shared
 app.setActivationPolicy(.regular)
 let delegate = AppDelegate()
 delegate.seedDemoTabs = args.contains("--seed-demo")
+delegate.goldenScene = args.contains("--golden-scene")
 delegate.restoreSession = !args.contains("--no-restore")
 if let i = args.firstIndex(of: "--store"), i + 1 < args.count { delegate.storePath = args[i + 1] }
 if let i = args.firstIndex(of: "--bench-discard"), i + 1 < args.count {
@@ -82,7 +83,9 @@ if let i = args.firstIndex(of: "--bench-discard"), i + 1 < args.count {
 }
 if let i = args.firstIndex(of: "--capture"), i + 1 < args.count {
     delegate.captureTo = args[i + 1]
-    delegate.onReadyForCapture = { w, path in Capture.windowByID(w, to: path) }
+    // The composite path needs no Screen Recording grant and no activation,
+    // so the gate can run the bare binary with a terminal frontmost.
+    delegate.onReadyForCapture = { w, path in await Capture.composite(w, to: path) }
 }
 app.delegate = delegate
 app.run()

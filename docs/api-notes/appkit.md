@@ -1,12 +1,12 @@
 # AppKit gotchas
 
-## You cannot screenshot the sidebar from inside the app
+## Screenshotting the sidebar from inside the app: solved, seventh attempt
 
-**Found:** 2026-08-07, macOS 26.5.2. Cost about an hour and five failed attempts.
-Recorded in full so nobody repeats it.
+**Found:** 2026-08-07, macOS 26.5.2. Six failed attempts recorded in full so
+nobody repeats them; the seventh works and is wired to `--capture`.
 
 Goal was TCC-free visual verification: capture Pane's own window from inside the
-process, so goldens need no Screen Recording grant. What actually happens:
+process, so goldens need no Screen Recording grant. The failures:
 
 | Attempt | Result |
 | --- | --- |
@@ -14,29 +14,48 @@ process, so goldens need no Screen Recording grant. What actually happens:
 | + `orderFront` / `displayIfNeeded` / `view.display()` | **WKWebView content captures correctly. Sidebar is blank white.** |
 | `layer.render(in:)` instead | *Worse* — uniform. An offscreen window has no populated layer tree. |
 | Removing `wantsLayer` from the sidebar's own view | Still blank. |
-| `screencapture -l <windowNumber>` from a bare exec | Frame captures; content and sidebar unpainted. |
+| `screencapture -l <windowNumber>` from a bare exec | Frame captures; content and sidebar unpainted — the occluded window never painted for the window server, and there is nothing to grab. |
+| Same via `open -a … --args --capture` | No file at all. TCC attributes the child `screencapture` to its *responsible process* — Pane itself under `open`, which holds no Screen Recording grant. The terminal's grant only covers processes the terminal is responsible for. |
 
-**Why.** `cacheDisplay` does not traverse layer-backed subviews, and
-`NSScrollView` is layer-backed by AppKit regardless of what the app requests.
-The sidebar lives in a scroll view, so it is structurally uncapturable this way.
+**Root cause, measured.** Two independent limits, one per pane:
 
-Note this is the **opposite** of the failure the research predicted. The
-expectation was that `WKWebView` — composited out-of-process in a remote layer
-tree — would come out blank while AppKit chrome captured fine. Exactly the
-reverse is true.
+- `cacheDisplay` *samples layer contents*; it does not re-draw them. The scroll
+  view's layer island only has populated contents when the window server has
+  composited it, so an unattended window yields a flat sidebar. (The earlier
+  "cacheDisplay cannot capture layer-backed views at all" theory was wrong —
+  with a WKWebView forcing whole-window layer backing and the window genuinely
+  on screen, it captures fine. The dependency is on *composited layer
+  contents*, which unattended runs never produce.)
+- No in-process draw can ever reach WKWebView pixels: they live in the
+  WebContent process's remote layer tree. This half the research predicted.
 
-**What works:** `screencapture -x -o -l<id>` where `id` is
-`NSWindow.windowNumber` (which *is* the CGWindowID), **with the app properly
-activated via LaunchServices** — i.e. launched as a bundle with `open`, not as a
-bare binary, and given time to paint. This needs the Screen Recording TCC grant.
+**What works — `Capture.composite`, no TCC, no activation:**
 
-**Status: unresolved for automation.** Visual goldens are therefore *not* wired
-into the phase gate yet. The sidebar is currently verified by a human-equivalent
-step — capture the full screen with Pane frontmost and actually look at the PNG.
-That is real verification, but it is manual, and `gate.sh` must keep listing
-visual goldens under "NOT proven by this run" until it is not.
+- Chrome: `view.displayIgnoringOpacity(bounds, in: bitmapContext)`. Unlike
+  `cacheDisplay` this *re-draws* the hierarchy into the given context instead of
+  sampling cached layer contents, so it renders the scroll view even on a window
+  never ordered on screen. Measured on a minimal repro: 341 distinct sidebar
+  colours vs 1 for `cacheDisplay` on the identical window.
+- Web content: `WKWebView.takeSnapshot` — WebKit's sanctioned export of the
+  remote layer tree, which also works while occluded — composited into the same
+  bitmap at the web view's frame. Snapshot only after `isLoading` clears, or
+  you get the page's bare background, which is indistinguishable from failure.
+- Draw at 1x: `displayIgnoringOpacity` honours the context's scale, not the
+  window's backing scale — a 2x bitmap comes out with the UI in one quarter.
+  1x is also what makes goldens comparable across machines.
 
-**Do not** let a green gate imply the sidebar was checked.
+Validation requires the *sidebar region* to be non-uniform on its own, not just
+the whole image — "web fine, sidebar flat" was attempt 2's exact failure and a
+whole-image check calls it success.
+
+`CGWindowListCreateImage` (the historical TCC-free own-window path) is hard
+unavailable in the macOS 26 SDK — compile error, "use ScreenCaptureKit". SCK
+itself still needs the TCC grant plus a window the window server has actually
+composited, so it inherits both problems the composite avoids.
+
+`screencapture -l` remains the only capture showing the REAL composited pixels
+(vibrancy, traffic lights). Manual parity checks only: it needs the grant on
+the responsible process and a genuinely frontmost, painted window.
 
 ## `NSWindowController` has no `addChild`
 

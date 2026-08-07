@@ -9,6 +9,11 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     /// screenshotted and reviewed without synthesising key events — which go to
     /// whichever app is frontmost and are therefore both unreliable and unsafe.
     public var seedDemoTabs = false
+    /// A hermetic scene for visual goldens: fixed titles, no navigation, no
+    /// favicon fetch. The demo seed is unusable as a golden because titles and
+    /// favicons arrive from the network at different times on every run — the
+    /// golden then fails against itself, which teaches people to ignore it.
+    public var goldenScene = false
     public var storePath: String?
     public var restoreSession = true
     /// Number of tabs to open for the discard benchmark, all on a local fixture
@@ -16,7 +21,8 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     public var benchDiscardTabs: Int?
     /// Where to write an in-app window capture once seeding settles, then exit.
     public var captureTo: String?
-    public var onReadyForCapture: ((NSWindow, String) -> Bool)?
+    /// Async because the composite capture awaits WKWebView.takeSnapshot.
+    public var onReadyForCapture: ((NSWindow, String) async -> Bool)?
 
     public override init() { super.init() }
 
@@ -28,12 +34,13 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.activate(ignoringOtherApps: true)
         controller = c
         if seedDemoTabs { seed(c) }
+        if goldenScene { seedGolden(c) }
         if let n = benchDiscardTabs { runDiscardBench(c, tabs: n) }
         if let path = captureTo, let w = c.window {
             // Give the seeded pages time to paint before capturing.
             Task { @MainActor in
                 try? await Task.sleep(for: .seconds(9))
-                let ok = onReadyForCapture?(w, path) ?? false
+                let ok = await onReadyForCapture?(w, path) ?? false
                 exit(ok ? 0 : 1)
             }
         }
@@ -157,6 +164,19 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             fflush(stdout)
             try? await Task.sleep(for: .seconds(6))
             exit(0)
+        }
+    }
+
+    /// Deterministic by construction: no network, no timers, no async fill.
+    private func seedGolden(_ c: BrowserWindowController) {
+        for (kind, title) in [
+            (TabKind.essential, "Mail"), (.essential, "Calendar"),
+            (.essential, "Code"), (.essential, "Design"), (.essential, "Tasks"),
+            (.pinned, "Documentation"), (.pinned, "Issue Tracker"),
+            (.ephemeral, "Search Results"), (.ephemeral, "Article"),
+            (.ephemeral, "Reference"),
+        ] as [(TabKind, String)] {
+            c.addGoldenTab(kind: kind, title: title)
         }
     }
 
