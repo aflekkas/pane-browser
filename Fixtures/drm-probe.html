@@ -1,0 +1,66 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Pane DRM probe</title>
+<style>body{font:13px ui-monospace,Menlo,monospace;margin:1.5rem}
+td{padding:2px 10px 2px 0}.y{color:#0a0}.n{color:#a00}</style>
+<h1>DRM probe</h1>
+<p>spec §8. Answers in five minutes what a week of manual testing would.</p>
+<table id="t"></table>
+<script>
+// Order matters: FairPlay variants first (the ones that might work), then
+// Widevine (expected dead — Google's CDM, no macOS WebKit path), then
+// ClearKey as a control that proves EME itself is present.
+const SYSTEMS = [
+  'com.apple.fps', 'com.apple.fps.1_0', 'com.apple.fps.2_0', 'com.apple.fps.3_0',
+  'com.widevine.alpha', 'com.microsoft.playready', 'org.w3.clearkey'
+];
+
+const CONFIG = [{
+  initDataTypes: ['sinf', 'cenc', 'keyids'],
+  videoCapabilities: [
+    { contentType: 'video/mp4; codecs="avc1.42E01E"' },
+    { contentType: 'video/mp4; codecs="hvc1"' }
+  ],
+  audioCapabilities: [{ contentType: 'audio/mp4; codecs="mp4a.40.2"' }],
+  distinctiveIdentifier: 'optional',
+  persistentState: 'optional',
+  sessionTypes: ['temporary']
+}];
+
+const results = { userAgent: navigator.userAgent, systems: {}, eme: !!navigator.requestMediaKeySystemAccess };
+
+async function probe(ks) {
+  if (!navigator.requestMediaKeySystemAccess) return { ok: false, error: 'EME absent' };
+  try {
+    const access = await navigator.requestMediaKeySystemAccess(ks, CONFIG);
+    const cfg = access.getConfiguration();
+    return { ok: true, keySystem: access.keySystem,
+             sessionTypes: cfg.sessionTypes, persistentState: cfg.persistentState,
+             distinctiveIdentifier: cfg.distinctiveIdentifier };
+  } catch (e) { return { ok: false, error: e.name + ': ' + e.message }; }
+}
+
+(async () => {
+  const t = document.getElementById('t');
+  for (const ks of SYSTEMS) {
+    const r = await probe(ks);
+    results.systems[ks] = r;
+    const row = t.insertRow();
+    row.insertCell().textContent = ks;
+    const c = row.insertCell();
+    c.textContent = r.ok ? 'AVAILABLE' : 'unavailable';
+    c.className = r.ok ? 'y' : 'n';
+    row.insertCell().textContent = r.ok ? JSON.stringify(r.sessionTypes) : r.error;
+  }
+  // Also report what the media element itself claims it can play.
+  const v = document.createElement('video');
+  results.canPlay = {
+    'mp4/avc1':  v.canPlayType('video/mp4; codecs="avc1.42E01E"'),
+    'mp4/hvc1':  v.canPlayType('video/mp4; codecs="hvc1"'),
+    'webm/vp9':  v.canPlayType('video/webm; codecs="vp9"'),
+    'mp4/av01':  v.canPlayType('video/mp4; codecs="av01.0.05M.08"'),
+  };
+  results.done = true;
+  window.__paneDRM = results;
+})();
+</script>

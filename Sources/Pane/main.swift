@@ -25,6 +25,14 @@ if args.contains("--bench-restore") {
     app.run()
 }
 
+if args.contains("--drm-probe") {
+    let app = NSApplication.shared
+    app.setActivationPolicy(.accessory)
+    let fixture = URL(fileURLWithPath: "Fixtures/drm-probe.html").standardizedFileURL
+    Task { @MainActor in exit(await DRMProbe.run(fixture: fixture)) }
+    app.run()
+}
+
 let app = NSApplication.shared
 app.setActivationPolicy(.regular)
 let delegate = AppDelegate()

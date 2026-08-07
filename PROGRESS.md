@@ -75,13 +75,26 @@ not work is worse than a slow number on one that does.
 
 An afternoon, and the cheapest decision point in the project. Do it inside A.
 
-- [ ] `Fixtures/drm-probe.html` calling `requestMediaKeySystemAccess('com.apple.fps')`
+- [x] `Fixtures/drm-probe.html` calling `requestMediaKeySystemAccess('com.apple.fps')`
 - [ ] Netflix / Disney+ / Apple TV+ / YouTube checked by hand, 1080p and 4K separately
-- [ ] Result written to `docs/research/` as a dated file
+- [x] Result written to `docs/research/2026-08-07-drm-probe-result.md`
 
 **Gate:** the FairPlay answer is written down. If FairPlay is unavailable in a
 third-party `WKWebView`, that is a product-defining fact and it changes what
 Pane is — surface it immediately rather than continuing.
+
+**RESULT 2026-08-07: PASS — GO.** All four `com.apple.fps` variants are
+AVAILABLE to an ad-hoc-signed binary with **no entitlements**. Widevine and
+PlayReady return `NotSupportedError`. ClearKey works as a control, proving EME
+is genuinely live rather than the result being a probe artefact.
+
+Caveat that shapes UI copy: every system resolves to `sessionTypes:
+["temporary"]`, `persistentState: "not-allowed"`. **Streaming works; offline
+downloads do not.** Say "offline downloads unavailable", never "DRM broken".
+
+Manual playback against real Netflix / Disney+ / Apple TV+ accounts is still
+outstanding — the probe proves the CDM is reachable, not that any given service
+permits us.
 
 ---
 
