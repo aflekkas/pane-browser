@@ -252,9 +252,10 @@ of X" note in `docs/api-notes/quarantine.md`.
 - [x] Cross-space tab drag with the profile warning §5 requires
 - [ ] Downloads panel is still an `NSAlert` rather than an `NSPopover`; no
       Dock-tile progress
-- [ ] Context menu has "Open in New Tab" but not the per-space submenu
-- [ ] No automated test yet for auth / cert / crash paths (they need the
-      fixture server, which is not built)
+- [x] Per-space context submenu — §6's "what makes multi-space actually usable"
+- [x] Fixture server built; auth, download and untrusted-cert paths now have
+      scenarios, with a `security.trust_all_certs` mutant proving the cert
+      assertion can actually fail
 
 ---
 

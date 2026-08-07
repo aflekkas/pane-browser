@@ -434,6 +434,20 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
             self.dispatch(.newTab(kind: .ephemeral))
             self.dispatch(.navigate(url.absoluteString))
         }
+        e.spacesProvider = { [weak self] in
+            (self?.spaceModel.spaces ?? []).map { (id: $0.id, name: $0.name) }
+        }
+        e.onOpenInSpace = { [weak self] url, target in
+            guard let self else { return }
+            let previous = self.spaceID
+            self.spaceModel.select(target)
+            let id = self.model.open(Tab(kind: .ephemeral, url: url, lastActiveAt: Date()),
+                                     select: false)
+            _ = self.engine(for: id)
+            self.spaceModel.select(previous)
+            self.sidebar.spaces = self.spaceModel
+            self.scheduleSave()
+        }
         e.authHandler = { [weak self] challenge in
             await AuthChallengeHandler.respond(to: challenge, window: self?.window)
         }

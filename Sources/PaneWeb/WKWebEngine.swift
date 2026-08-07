@@ -13,6 +13,12 @@ public final class WKWebEngine: NSObject, WebEngine {
     /// Host hooks for the parts of §6 that need app-level context.
     public var onDownload: ((WKDownload, URL?) -> Void)?
     public var onOpenInNewTab: ((URL) -> Void)?
+    /// spec §6 — the per-space submenu. Supplies (spaceID, name) pairs and
+    /// receives the chosen destination. §6 calls this "what makes multi-space
+    /// actually usable", and it is: without it, moving a link to another space
+    /// means opening it, dragging the row, and confirming a dialog.
+    public var spacesProvider: (() -> [(id: String, name: String)])?
+    public var onOpenInSpace: ((URL, String) -> Void)?
     public var authHandler: ((URLAuthenticationChallenge) async -> (URLSession.AuthChallengeDisposition, URLCredential?))?
     public var openPanelHandler: ((WKOpenPanelParameters, @escaping ([URL]?) -> Void) -> Void)?
     public var jsDialogHandler: ((String, String, @escaping (Bool) -> Void) -> Void)?
@@ -101,6 +107,25 @@ extension WKWebEngine {
         item.target = self
         item.representedObject = url
         menu.insertItem(item, at: 0)
+
+        let spaces = spacesProvider?() ?? []
+        guard spaces.count > 1 else { return }
+        let submenu = NSMenu()
+        for s in spaces {
+            let mi = NSMenuItem(title: s.name, action: #selector(openInSpace(_:)), keyEquivalent: "")
+            mi.target = self
+            mi.representedObject = [url.absoluteString, s.id]
+            submenu.addItem(mi)
+        }
+        let spacesItem = NSMenuItem(title: "Open in Space", action: nil, keyEquivalent: "")
+        spacesItem.submenu = submenu
+        menu.insertItem(spacesItem, at: 1)
+    }
+
+    @objc private func openInSpace(_ sender: NSMenuItem) {
+        guard let pair = sender.representedObject as? [String], pair.count == 2,
+              let url = URL(string: pair[0]) else { return }
+        onOpenInSpace?(url, pair[1])
     }
 
     @objc private func openCurrentInNewTab(_ sender: NSMenuItem) {

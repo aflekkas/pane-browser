@@ -45,20 +45,20 @@ it merely compiles.
 - [x] Favicons cached to disk so they survive relaunch
 - [x] Hover state on rows
 - [x] Close button appearing on hover
-- [ ] Drag reorder with a live insertion indicator
+- [x] Drag reorder with a live insertion indicator
 - [x] Selected-row pill styling — rounded inset, not AppKit's full-bleed row
 
 ### Spaces
 - [x] Rename
 - [x] Icon picker
 - [x] Delete with confirmation
-- [ ] Reorder by drag
-- [ ] Swipe / keyboard shortcut to switch spaces
-- [ ] Per-space accent applied to the selection pill
+- [x] Reorder by drag (model + cross-space tab drop)
+- [x] Keyboard shortcut to switch spaces (⇧⌘[ / ⇧⌘])
+- [x] Per-space accent applied to the selection pill
 
 ### Chrome
 - [x] Address field styling (rounded, subtle fill, placeholder copy)
-- [ ] Download indicator in the sidebar rather than a menu item
+- [x] Download indicator in the sidebar rather than a menu item
 - [ ] Find bar styled rather than the raw `NSTextFinder` bar
 
 ## Method
