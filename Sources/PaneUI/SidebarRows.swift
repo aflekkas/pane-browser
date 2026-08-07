@@ -15,6 +15,7 @@ final class TabRowView: NSTableCellView {
     init(tab: Tab, onClose: (() -> Void)? = nil) {
         self.onClose = onClose
         super.init(frame: .zero)
+        self.isDiscarded = tab.lifecycle == .discarded
 
         let icon = NSImageView()
         icon.translatesAutoresizingMaskIntoConstraints = false
@@ -36,10 +37,12 @@ final class TabRowView: NSTableCellView {
         label.translatesAutoresizingMaskIntoConstraints = false
         label.lineBreakMode = .byTruncatingTail
         label.font = .systemFont(ofSize: 13)
+        // Colour is set here for the UNSELECTED case; PillRowView flips it when
+        // the row is selected and emphasized. Setting backgroundStyle alone did
+        // nothing — NSTextField does not repaint from it — so the selected row
+        // was dark text on an 85%-alpha accent fill, i.e. a contrast failure on
+        // the one row the user is actually looking at.
         label.textColor = tab.lifecycle == .discarded ? .secondaryLabelColor : .labelColor
-        // On the accent pill the label must flip to white, or it fails contrast
-        // exactly when it matters most — on the row you are looking at.
-        label.cell?.backgroundStyle = .normal
         label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
         // Close affordance, revealed on hover — the row should be quiet until
@@ -74,6 +77,22 @@ final class TabRowView: NSTableCellView {
     required init?(coder: NSCoder) { fatalError("not used") }
 
     @objc private func closeTapped() { onClose?() }
+
+    /// White on the accent pill, normal otherwise. Called by PillRowView, which
+    /// is the only thing that knows whether the row is drawn selected.
+    func setSelected(_ selected: Bool) {
+        guard let label = textField else { return }
+        if selected {
+            label.textColor = .white
+            closeButton.contentTintColor = .white
+            imageView?.contentTintColor = imageView?.contentTintColor == nil ? nil : .white
+        } else {
+            label.textColor = isDiscarded ? .secondaryLabelColor : .labelColor
+            closeButton.contentTintColor = .secondaryLabelColor
+        }
+    }
+
+    private var isDiscarded = false
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
@@ -119,6 +138,32 @@ final class PillRowView: NSTableRowView {
 
     /// Hover highlight, distinct from selection and much lighter.
     var isHovered = false { didSet { needsDisplay = true } }
+    private var trackingArea: NSTrackingArea?
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let t = trackingArea { removeTrackingArea(t) }
+        let t = NSTrackingArea(rect: bounds,
+                               options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+                               owner: self)
+        addTrackingArea(t)
+        trackingArea = t
+    }
+
+    override func mouseEntered(with event: NSEvent) { isHovered = true }
+    override func mouseExited(with event: NSEvent) { isHovered = false }
+
+    /// Repaint the label whenever selection changes, so it can sit on the
+    /// accent fill legibly. `drawSelection` cannot do this — it paints the
+    /// background, not the subviews.
+    override var isSelected: Bool { didSet { syncLabelColour() } }
+    override var isEmphasized: Bool { didSet { syncLabelColour() } }
+
+    private func syncLabelColour() {
+        guard let cell = subviews.compactMap({ $0 as? TabRowView }).first
+                ?? (self as NSView).subviews.first as? TabRowView else { return }
+        cell.setSelected(isSelected && isEmphasized)
+    }
     override func drawBackground(in dirtyRect: NSRect) {
         super.drawBackground(in: dirtyRect)
         guard isHovered, !isSelected else { return }
