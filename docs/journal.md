@@ -336,3 +336,54 @@ canary.
 
 **Do not** start G before 1–3 are done. Wanting to build the glass is the
 signal that the plumbing is unfinished, and that rule has held all day.
+
+## 2026-08-07 (15:00–) — visual goldens, solved by escalating
+
+**Correction to the previous entry:** I wrote a "session close" note at 15:06
+believing the 18:00 deadline was minutes away. It was nearly three hours away.
+Miscounted; kept working.
+
+**Visual goldens are done.** This had failed six times across the session, and
+each failure was recorded in `docs/api-notes/appkit.md` with a working theory
+attached. The theory was wrong.
+
+Per CLAUDE.md's two-strike rule I escalated to a stronger model instead of
+trying a seventh variation myself. It found the root cause in one pass:
+
+> `cacheDisplay` **samples** composited layer contents; it does not re-draw
+> them. An unattended window is never composited by the window server, so there
+> is nothing to sample. `displayIgnoringOpacity(_:in:)` re-draws the hierarchy
+> into the context instead — 341 sidebar colours vs 1, on the identical window.
+
+My recorded theory ("NSScrollView is layer-backed, so cacheDisplay structurally
+cannot capture it") was disproved by a minimal repro: cacheDisplay captures the
+scroll view fine when the window is genuinely composited. The dependency is on
+*composited contents*, not layer-backing. The api-note is corrected.
+
+Two other things fell out, both worth keeping:
+- `CGWindowListCreateImage` is **hard unavailable** in the macOS 26 SDK — a
+  compile error directing you to ScreenCaptureKit, which needs the same TCC
+  grant and a composited window, so it solves nothing here.
+- TCC attributes a spawned `screencapture` to its **responsible process**. Under
+  `open -a`, that is Pane, which holds no grant — which is exactly why attempt
+  six produced no file at all rather than a bad image.
+
+**The escalation rule earned its place.** Six attempts is five more than the
+rule allows. Writing it down was not enough; I still ground. The rule needs to
+fire on the count, not on how promising the next idea feels.
+
+**Goldens have to be hermetic.** The first working capture still failed against
+itself — 0.83%, then 3.6% on the next run — because titles and favicons arrive
+from the network at different times. A check that cries wolf is one people learn
+to ignore, which is worse than not having it. The golden scene now has fixed
+titles, no navigation and no favicon fetch, and the diff is scoped to the
+sidebar because the content area shows a live third-party page.
+
+**And it is proven capable of failing:** row height 28→40 moves the ratio from
+0.0002 to 0.0934. My first two attempts to verify that were `sed` no-ops that
+silently matched nothing and reported a comforting 0.0 — the same false-green
+shape as the stale binary earlier. Checking that a perturbation *actually
+applied* is now part of how I verify a check.
+
+**Also landed:** the §5 scroll claim is measured (p95 4.7ms at 201 rows), the
+fixture server exists, and the per-space context submenu is in.

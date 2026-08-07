@@ -21,11 +21,15 @@ complete; it will catch you.
 
 ```
 unit checks        33 suites, 98 assertions, 0 failed
-scenarios          7 scenarios, 15 assertions, 0 failed
-mutation canary    4/4 mutants caught
-restore latency    p50 83ms / 200ms, scroll restored
-discard memory     PASS
+scenarios          10 scenarios, 18 assertions, 0 failed
+mutation canary    5/5 mutants caught
+restore latency    p50 87ms / 200ms, scroll restored
+discard memory     freed 75MB of 204MB, compressor delta 0
+visual goldens     ratio 0.0000
+sidebar scroll     p95 4.7ms / 8ms at 201 rows
 profile isolation  PASS
+download quarantine PASS
+DRM (FairPlay)     GO
 ```
 
 ---
