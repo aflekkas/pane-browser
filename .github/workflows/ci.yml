@@ -1,0 +1,19 @@
+name: gate
+on: [push, pull_request]
+jobs:
+  gate:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      # CI runs the IDENTICAL script the pre-commit hook runs, so a locally
+      # skipped hook (--no-verify) surfaces here within one push.
+      - name: gate
+        run: ./Scripts/gate.sh pre
+      - name: no SPI in a ship build
+        run: |
+          if [ -f Package.swift ]; then
+            swift build -c release
+            if nm -u .build/release/Pane 2>/dev/null | grep -q _webProcessIdentifier; then
+              echo "benchmark-only SPI leaked into the ship build"; exit 1
+            fi
+          fi

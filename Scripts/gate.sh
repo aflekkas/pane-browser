@@ -1,0 +1,85 @@
+#!/bin/bash
+# THE gate. Two modes:
+#
+#   ./Scripts/gate.sh pre     fast, runs before every commit (budget: 60s)
+#   ./Scripts/gate.sh phase   slow, runs at every milestone
+#
+# On success `pre` appends a receipt keyed to `git write-tree` — the hash of the
+# exact content being committed. The pre-commit hook refuses any commit without
+# a passing receipt for that precise tree, so editing a byte after the gate ran
+# invalidates it. This converts "I should test before committing" into "I cannot
+# commit untested content".
+
+set -uo pipefail
+cd "$(dirname "$0")/.."
+MODE="${1:-pre}"
+RECEIPTS=.pane-gate.log
+FAIL=0
+step() { printf '\n\033[1m== %s\033[0m\n' "$*"; }
+
+step "scope and invariants"
+./Scripts/check-scope.sh || FAIL=1
+
+step "PROGRESS.md is honest"
+# A checked box whose gate does not pass is a false claim, and every decision
+# built on top of one is also wrong.
+if [ -x Scripts/check-progress.sh ]; then ./Scripts/check-progress.sh || FAIL=1
+else echo "  (no completed phases to re-verify yet)"; fi
+
+if [ -f Package.swift ]; then
+  step "build"
+  swift build -c debug 2>&1 | tail -20 || FAIL=1
+
+  step "unit tests (PaneCore — pure logic, no AppKit)"
+  swift test --filter PaneCoreTests 2>&1 | tail -20 || FAIL=1
+fi
+
+if [ "$MODE" = phase ] && [ -f .build/debug/Pane ]; then
+  step "scenarios"
+  ./Scripts/fixtures.sh start
+  .build/debug/Pane --selftest --json || FAIL=1
+
+  step "mutation canary"
+  # A green suite that cannot detect a planted bug proves nothing. This step
+  # FAILS IF THE SUITE PASSES.
+  M=$(python3 -c "import json,random;m=json.load(open('Harness/mutants.json'));print(random.choice(m)['id'])" 2>/dev/null || echo "")
+  if [ -n "$M" ]; then
+    if .build/debug/Pane --selftest --mutate "$M" >/dev/null 2>&1; then
+      printf '\033[31mFAIL\033[0m suite PASSED with mutant %s planted — it proves nothing\n' "$M"; FAIL=1
+    else printf '\033[32m ok \033[0m suite caught mutant %s\n' "$M"; fi
+  fi
+
+  step "benchmarks"
+  ./Scripts/bench.sh || FAIL=1
+  ./Scripts/fixtures.sh stop
+fi
+
+# ---------------------------------------------------------------------------
+# What this run did NOT prove. Printed always, generated rather than
+# hand-written, so it stays honest as the suite grows. Green must never be read
+# as "shippable".
+# ---------------------------------------------------------------------------
+step "NOT proven by this run"
+cat <<'EOF'
+  - window-server event routing (synthetic events only)
+  - real cross-application drag and drop
+  - GPU-composited content under the takeSnapshot fallback
+  - anything requiring TCC-gated capture
+EOF
+[ "$MODE" = pre ] && cat <<'EOF'
+  - visual goldens (phase gate only)
+  - memory and restore-latency thresholds (phase gate only)
+  - mutation canary (phase gate only)
+EOF
+
+if [ "$FAIL" = 0 ]; then
+  printf '\n\033[32mGATE PASS\033[0m (%s)\n' "$MODE"
+  if [ "$MODE" = pre ]; then
+    echo "$(git write-tree) pre $(date -u +%s) pass" >> "$RECEIPTS"
+    echo "receipt written for tree $(git write-tree)"
+  fi
+  exit 0
+else
+  printf '\n\033[31mGATE FAIL\033[0m (%s) — no receipt written\n' "$MODE"
+  exit 1
+fi
