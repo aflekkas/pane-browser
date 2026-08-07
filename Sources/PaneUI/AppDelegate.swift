@@ -9,6 +9,8 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     /// screenshotted and reviewed without synthesising key events — which go to
     /// whichever app is frontmost and are therefore both unreliable and unsafe.
     public var seedDemoTabs = false
+    public var storePath: String?
+    public var restoreSession = true
     /// Where to write an in-app window capture once seeding settles, then exit.
     public var captureTo: String?
     public var onReadyForCapture: ((NSWindow, String) -> Bool)?
@@ -17,7 +19,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
 
     public func applicationDidFinishLaunching(_ n: Notification) {
         buildMenu()
-        let c = BrowserWindowController()
+        let c = BrowserWindowController(storePath: storePath, restoreSession: restoreSession)
         c.showWindow(nil)
         c.window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
@@ -34,6 +36,10 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     public func applicationShouldTerminateAfterLastWindowClosed(_ s: NSApplication) -> Bool { true }
+
+    /// spec §6 — full snapshot on terminate, so a clean quit never loses the
+    /// last 500ms of debounced writes.
+    public func applicationWillTerminate(_ n: Notification) { controller?.saveNow() }
 
     /// Menu items dispatch the same `Command` values scenarios do (ADR 0006).
     private func buildMenu() {

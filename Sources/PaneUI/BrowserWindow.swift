@@ -22,8 +22,23 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
     private let reloadButton = NSButton()
     private var sidebarWidth: NSLayoutConstraint!
     private var sweepTimer: Timer?
+    private var saveTimer: Timer?
+    private let store: Store?
+    /// Where the session lives. Under Application Support so it survives, and
+    /// overridable so scenarios and the kill -9 gate can use a scratch file.
+    public static func defaultStorePath() -> String {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Pane", isDirectory: true)
+        try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+        return base.appendingPathComponent("pane.sqlite").path
+    }
 
-    public init(startURL: URL? = nil) {
+    private let storePathInUse: String
+
+    public init(startURL: URL? = nil, storePath: String? = nil, restoreSession: Bool = true) {
+        let p = storePath ?? BrowserWindowController.defaultStorePath()
+        self.storePathInUse = p
+        self.store = try? Store(path: p)
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1280, height: 800),
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
@@ -38,9 +53,13 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
         sidebar.onClose    = { [weak self] in self?.dispatch(.closeTab($0)) }
         sidebar.onReorder  = { [weak self] id, i, kind in self?.reorder(id, i, kind) }
 
-        let home = startURL ?? URLNormalizer.resolve("duckduckgo.com")!
-        dispatch(.newTab(kind: .ephemeral))
-        dispatch(.navigate(home.absoluteString))
+        if restoreSession {
+            restore(fallback: startURL)
+        } else {
+            let home = startURL ?? URLNormalizer.resolve("duckduckgo.com")!
+            dispatch(.newTab(kind: .ephemeral))
+            dispatch(.navigate(home.absoluteString))
+        }
 
         // spec §4 — the idle sweep. One minute is fine; the thresholds are 5
         // and 15 minutes, so a coarse tick costs nothing and avoids waking the
@@ -100,6 +119,59 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
         }
         sidebar.model = model
         syncChrome()
+        scheduleSave()
+    }
+
+    // MARK: - Persistence (spec §2, §4)
+
+    /// Continuous writes, debounced 500ms per spec §6. Every tab mutation lands
+    /// eventually; none of them block the UI.
+    private func scheduleSave() {
+        saveTimer?.invalidate()
+        saveTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated { self?.saveNow() }
+        }
+    }
+
+    public func saveNow() {
+        guard let store else { return }
+        let tabs = model.tabs
+        // Capture live tabs' state too, so a crash loses at most the last
+        // interaction rather than the whole session.
+        var live: [(TabID, Data)] = []
+        for (id, e) in engines {
+            if let blob = e.captureInteractionState() { live.append((id, blob)) }
+        }
+        let pending = states
+        Task {
+            try? await store.saveTabs(tabs, spaceID: nil)
+            for (id, blob) in pending { try? await store.saveSnapshot(id, state: blob) }
+            for (id, blob) in live { try? await store.saveSnapshot(id, state: blob) }
+        }
+    }
+
+    /// spec §6 — restore the sidebar instantly from SQLite and lazily
+    /// materialise only the active tab. A restored tab starts `discarded`, so
+    /// twenty restored tabs cost twenty rows, not twenty renderers.
+    private func restore(fallback: URL?) {
+        guard store != nil else { return }
+        let (loaded, snaps) = Store.loadSessionSync(path: storePathInUse)
+
+        guard !loaded.isEmpty else {
+            let home = fallback ?? URLNormalizer.resolve("duckduckgo.com")!
+            dispatch(.newTab(kind: .ephemeral))
+            dispatch(.navigate(home.absoluteString))
+            return
+        }
+        states = snaps
+        for var t in loaded {
+            t.lifecycle = .discarded          // materialise lazily
+            model.open(t, select: false)
+        }
+        if let first = model.tabs.first { model.select(first.id, at: Date()) }
+        sidebar.model = model
+        showSelected()
+        syncChrome()
     }
 
     // MARK: - Engines and lifecycle (spec §4)
@@ -130,7 +202,10 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
     /// it is the only step that reclaims memory; everything else is bookkeeping.
     private func discard(_ id: TabID) {
         guard let e = engines[id] else { return }
-        if let blob = e.captureInteractionState() { states[id] = blob }
+        if let blob = e.captureInteractionState() {
+            states[id] = blob
+            if let store { Task { try? await store.saveSnapshot(id, state: blob) } }
+        }
         e.webView.removeFromSuperview()
         engines[id] = nil
         model.markDiscarded(id)

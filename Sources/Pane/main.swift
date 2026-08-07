@@ -37,6 +37,8 @@ let app = NSApplication.shared
 app.setActivationPolicy(.regular)
 let delegate = AppDelegate()
 delegate.seedDemoTabs = args.contains("--seed-demo")
+delegate.restoreSession = !args.contains("--no-restore")
+if let i = args.firstIndex(of: "--store"), i + 1 < args.count { delegate.storePath = args[i + 1] }
 if let i = args.firstIndex(of: "--capture"), i + 1 < args.count {
     delegate.captureTo = args[i + 1]
     delegate.onReadyForCapture = { w, path in Capture.windowByID(w, to: path) }

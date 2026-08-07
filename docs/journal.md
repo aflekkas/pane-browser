@@ -170,3 +170,41 @@ visual goldens under "NOT proven by this run".
 (bundle + `open`, give it time to paint, capture by window number), or accept
 manual visual checks and move to milestone C — session persistence via the Store
 actor, which unblocks the drag-reorder-survives-relaunch check.
+
+## 2026-08-07 (late) — milestone C, persistence
+
+**Attempted:** the `Store` actor and session restore.
+
+**What happened.** Gate passed. Seeded ten tabs, `kill -9`, relaunched — all
+came back with titles, kinds and sort order intact, 8 of 11 as `discarded` so
+they cost rows rather than renderers. 33 MB for eleven tabs.
+
+**Swift 6 friction, twice, both worth remembering:**
+
+- An actor's `init` cannot call actor-isolated methods. Opening and migrating
+  the database became nonisolated statics operating on a local handle.
+- `deinit` cannot touch a non-Sendable stored property, so `OpaquePointer` could
+  not be closed there. Replaced with an explicit `close()`. This is fine: WAL
+  recovers cleanly from an unclean close, which is exactly what the `kill -9`
+  gate exercises anyway.
+- Restore at launch wanted to `await`, which `init` cannot. The first attempt
+  used a `DispatchSemaphore` plus `Task.detached` capturing locals — Swift 6
+  correctly rejected it as a data race. Replaced with
+  `Store.loadSessionSync(path:)`, a nonisolated static that opens its own
+  read-only handle. Safe because it runs before any writer exists and WAL allows
+  concurrent readers regardless.
+
+**Self-caught scope creep.** The sidebar shows `moon.zzz` on a discarded row.
+I added it because the memory story is the product's whole claim and making it
+invisible felt wrong — which is exactly the reasoning that produces scope creep.
+Spec §5 does not mention it. Flagged to Alex rather than silently kept.
+
+**Arc reference received** for sidebar proportions; measurements recorded in
+`docs/reference/arc-sidebar.md`. Row pitch ~27pt matches what Pane already uses.
+The substantive difference is structural, not proportional: Arc puts the address
+bar and nav controls *inside the sidebar*, leaving the content area completely
+free of chrome. That conflicts with nothing in the spec but is not specified
+either, so it is held for a decision rather than assumed.
+
+**Next session:** the discard-then-measure benchmark, which is the one piece of
+the memory claim still unproven.

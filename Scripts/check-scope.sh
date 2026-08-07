@@ -67,7 +67,18 @@ check_grep() { # <label> <pattern> <path-glob>
 }
 
 check_grep "no SwiftUI in the sidebar or any list"  '^import SwiftUI'         "$SRC"
-check_grep "all SQLite through the Store actor"     '\bsqlite3_'              "$SRC"
+
+# All SQLite through the single Store actor. Store.swift is the one file
+# permitted to contain it — that is the whole point of the invariant, not an
+# exception to it.
+if [ -d "$SRC" ]; then
+  hits=$(grep -rlnE '\bsqlite3_' --include='*.swift' "$SRC" 2>/dev/null \
+         | grep -v '/PaneCore/Store\.swift$' || true)
+  if [ -n "$hits" ]; then
+    for h in $hits; do allowed "$h" || bad "all SQLite through the Store actor: $h"; done
+  else ok "all SQLite through the Store actor"; fi
+fi
+
 check_grep "injected JS stays in an isolated world" 'WKContentWorld\.page'    "$SRC"
 check_grep "no private API (leading-underscore)"    '\._[a-z][A-Za-z0-9]*\('  "$SRC"
 

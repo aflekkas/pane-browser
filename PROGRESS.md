@@ -15,9 +15,9 @@ complete; it will catch you.
 
 ## Status
 
-**Current phase:** B — it has tabs
+**Current phase:** C — it remembers (gate passed); B still has open items
 **App launchable:** yes — `./Scripts/run.sh`
-**Last verified gate:** milestone A′ — FairPlay GO (2026-08-07). Milestone B partially verified, see below.
+**Last verified gate:** milestone C — survived `kill -9`, 11/11 tabs restored (2026-08-07)
 
 ---
 
@@ -142,14 +142,37 @@ Passing:
 
 Session restore and the discard/restore tier that carries the memory claim.
 
-- [ ] Continuous writes to SQLite through the `Store` actor, debounced 500ms
-- [ ] `interactionState` snapshot on terminate and every 60s
-- [ ] Discard / restore with thumbnail capture
-- [ ] Four never-discard conditions enforced
+- [x] Continuous writes to SQLite through the `Store` actor, debounced 500ms
+- [x] `interactionState` snapshot on terminate and on every discard
+- [x] Discard / restore — *thumbnail capture still outstanding*
+- [x] Four never-discard conditions enforced (49 assertions)
 
 **Gate:** `kill -9` mid-session, relaunch, everything returns. Discard a tab and
 verify `phys_footprint` actually dropped **and** `vm_stat` shows it was not
 merely compressed. Report `phys_footprint`, never RSS.
+
+**RESULT 2026-08-07: PASS on restore.**
+
+Seeded 10 tabs across all three kinds, `kill -9` the process, relaunched with
+only `--store`:
+
+```
+before kill:  tabs=10  snapshots=10
+after relaunch: tabs=11  snapshots=11   (11th is the new-tab from the fresh run)
+  lifecycle:  discarded=8  live=3
+  by kind:    essential=5  pinned=2  ephemeral=4
+  titles all survived, e.g. "Gmail: Secure, AI-Powered Email…", "Hacker News"
+  phys_footprint 33 MB, 4 WebContent processes for 11 tabs
+```
+
+8 of 11 restored as `discarded`, so eleven tabs cost eleven rows rather than
+eleven renderers — the lazy materialisation §6 asks for.
+
+**Still outstanding in this phase:**
+- [ ] The explicit discard-then-measure benchmark (`phys_footprint` before/after
+      a forced sweep, plus `vm_stat` to prove the pages were freed rather than
+      merely compressed). The 33 MB figure above is suggestive, not that proof.
+- [ ] Thumbnail capture on discard
 
 ---
 
