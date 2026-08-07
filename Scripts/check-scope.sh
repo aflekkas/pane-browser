@@ -133,7 +133,13 @@ if [ -d "$SRC" ]; then
         | grep -vE '^\s*(//|$)' | wc -l | tr -d ' ')
   phase=$(grep -m1 '^\*\*Current phase:\*\*' PROGRESS.md | sed 's/.*\*\* *//' | cut -c1)
   ceil=$(awk -F'|' -v p="$phase" '$2 ~ ("^ *" p " ") {gsub(/[ ,]/,"",$3); print $3; exit}' docs/budget.md)
-  [ -z "${ceil:-}" ] && ceil=1200
+  # Silently defaulting is how a budget check becomes theatre: an unparseable
+  # phase line quietly imposed phase A's 1200-line ceiling on a 4000-line tree,
+  # which looks identical to a real overrun. Say what happened instead.
+  if [ -z "${ceil:-}" ]; then
+    bad "cannot read a ceiling for phase '$phase' from docs/budget.md — fix the '**Current phase:**' line in PROGRESS.md"
+    ceil=999999
+  fi
   if [ "$loc" -gt "$ceil" ]; then
     bad "LOC budget: $loc > $ceil for phase $phase (docs/budget.md)"
   else ok "LOC budget: $loc / $ceil"; fi

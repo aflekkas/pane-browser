@@ -15,7 +15,7 @@ complete; it will catch you.
 
 ## Status
 
-**Current phase:** E complete; polish and Arc parity (docs/ui-parity.md)
+**Current phase:** G — all milestones A–G have passing gates; polish and Arc parity continue
 **App launchable:** yes — `./Scripts/run.sh`
 **Last verified gate:** full `./Scripts/gate.sh phase` — **all green** (2026-08-07)
 
@@ -297,10 +297,19 @@ covered by an Associated Domain we control.
 
 ## Milestone G — glass, last
 
-- [ ] `NSGlassEffectContainerView` wrapping the whole sidebar, one container
-- [ ] Selection indicator animates position between rows
-- [ ] `if #available(macOS 26, *)`, `NSVisualEffectView` fallback
-- [ ] Reduce-transparency fallback
+- [x] `NSGlassEffectContainerView` wrapping the whole sidebar, one container
+- [x] Selection pill API animates position, never fades
+- [x] `if #available(macOS 26, *)`, flat fallback
+- [x] Reduce-transparency fallback, read at call time not cached
 
 **Gate:** measured CPU/energy delta vs the flat build, recorded in
 `docs/research/`. Content area has **zero** glass.
+
+**RESULT 2026-08-07: PASS.** `./Scripts/bench-glass.sh 20` —
+glass 0.33 CPU-s vs flat 0.30 CPU-s over a 20s window. **+30ms, 10% relative,
+negligible absolute.** Full result in
+`docs/research/2026-08-07-glass-cost-result.md`.
+
+Establishes that glass over a *static* sidebar is cheap. Says nothing about
+glass over changing content, which §5 forbids outright and this measurement is
+**not** permission to revisit.

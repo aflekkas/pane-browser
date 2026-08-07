@@ -65,6 +65,9 @@ if [ "$MODE" = phase ] && [ -f .build/debug/Pane ]; then
   step "visual goldens (spec §5)"
   ./Scripts/visual.sh check || FAIL=1
 
+  step "glass CPU delta (spec §5, milestone G)"
+  ./Scripts/bench-glass.sh 12 || FAIL=1
+
   step "sidebar scroll at 200 rows (spec §5)"
   .build/debug/Pane --bench-scroll --rows 200 || FAIL=1
 
