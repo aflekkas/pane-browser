@@ -327,6 +327,16 @@ public final class SidebarController: NSViewController {
         syncSelection()
     }
 
+    /// Redraw rows in place. Used when a favicon arrives — reloading the whole
+    /// outline would lose selection and scroll position for a 16x16 image.
+    public func reloadRows() {
+        let sel = outline.selectedRow
+        outline.reloadData()
+        if sel >= 0, sel < rows.count {
+            outline.selectRowIndexes(IndexSet(integer: sel), byExtendingSelection: false)
+        }
+    }
+
     private func syncSelection() {
         guard let sel = model.selected,
               let i = rows.firstIndex(of: .tab(sel)) else {

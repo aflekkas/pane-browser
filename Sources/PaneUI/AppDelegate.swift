@@ -68,6 +68,16 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         let side = NSMenuItem(title: "Toggle Sidebar", action: #selector(toggleSide), keyEquivalent: "s")
         side.keyEquivalentModifierMask = [.command, .control]
         viewMenu.addItem(side)
+        viewMenu.addItem(.separator())
+        viewMenu.addItem(withTitle: "Find…", action: #selector(findInPage), keyEquivalent: "f")
+        let next = NSMenuItem(title: "Find Next", action: #selector(findNext), keyEquivalent: "g")
+        viewMenu.addItem(next)
+        let prev = NSMenuItem(title: "Find Previous", action: #selector(findPrev), keyEquivalent: "G")
+        prev.keyEquivalentModifierMask = [.command, .shift]
+        viewMenu.addItem(prev)
+        viewMenu.addItem(.separator())
+        let dl = NSMenuItem(title: "Downloads", action: #selector(showDownloads), keyEquivalent: "j")
+        viewMenu.addItem(dl)
         viewMenu.addItem(withTitle: "Open Location…", action: #selector(BrowserWindowController.focusAddress), keyEquivalent: "l")
         viewMenu.addItem(withTitle: "Reload", action: #selector(reloadPage), keyEquivalent: "r")
         viewMenu.addItem(.separator())
@@ -126,6 +136,10 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    @objc private func findInPage()  { controller?.performFind() }
+    @objc private func findNext()    { controller?.findNext() }
+    @objc private func findPrev()    { controller?.findPrevious() }
+    @objc private func showDownloads() { controller?.showDownloadsPanel() }
     @objc private func reloadPage()  { controller?.dispatch(.reload) }
     @objc private func newTab()      { controller?.dispatch(.newTab(kind: .ephemeral)) }
     @objc private func closeTab()    { controller?.dispatch(.closeTab(nil)) }

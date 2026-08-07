@@ -1,6 +1,7 @@
 // spec: §5
 import AppKit
 import PaneCore
+import PaneWeb
 
 /// A tab row in the Pinned or Today list. Favicon slot plus title.
 /// A discarded tab is dimmed — the user should be able to see which tabs cost
@@ -13,9 +14,18 @@ final class TabRowView: NSTableCellView {
         let icon = NSImageView()
         icon.translatesAutoresizingMaskIntoConstraints = false
         icon.imageScaling = .scaleProportionallyDown
-        icon.image = NSImage(systemSymbolName: tab.lifecycle == .discarded ? "moon.zzz" : "globe",
-                             accessibilityDescription: nil)
-        icon.contentTintColor = tab.lifecycle == .discarded ? .tertiaryLabelColor : .secondaryLabelColor
+        // spec §5 — a discarded row dims and swaps its favicon for a sleep
+        // glyph. That is the only affordance for the memory behaviour.
+        if tab.lifecycle == .discarded {
+            icon.image = NSImage(systemSymbolName: "moon.zzz", accessibilityDescription: "Discarded")
+            icon.contentTintColor = .tertiaryLabelColor
+        } else if let u = tab.url, let fav = FaviconFetcher.shared.icon(for: u) {
+            icon.image = fav
+            icon.contentTintColor = nil
+        } else {
+            icon.image = NSImage(systemSymbolName: "globe", accessibilityDescription: nil)
+            icon.contentTintColor = .secondaryLabelColor
+        }
 
         let label = NSTextField(labelWithString: tab.displayName)
         label.translatesAutoresizingMaskIntoConstraints = false
@@ -67,7 +77,11 @@ final class EssentialsRowView: NSView {
             b.layer?.backgroundColor = (model.selected == id
                 ? NSColor.controlAccentColor.withAlphaComponent(0.22)
                 : NSColor.quaternaryLabelColor.withAlphaComponent(0.35)).cgColor
-            b.image = NSImage(systemSymbolName: "square.grid.2x2", accessibilityDescription: tab.displayName)
+            if let u = tab.url, let fav = FaviconFetcher.shared.icon(for: u) {
+                b.image = fav
+            } else {
+                b.image = NSImage(systemSymbolName: "square.grid.2x2", accessibilityDescription: tab.displayName)
+            }
             b.imageScaling = .scaleProportionallyDown
             b.toolTip = tab.displayName
             b.title = ""

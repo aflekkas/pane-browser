@@ -47,6 +47,13 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <!-- Drives macOS ITP state together with linkedOnOrAfter. NOT the browser
        check, which is gated behind ENABLE(APP_BOUND_DOMAINS) and is
        iOS-only (spec §8). -->
+  <!-- Security-critical. LaunchServices quarantines files this app creates
+       ONLY if this is set (or the bundle ID is in CoreTypes Exceptions.plist,
+       which a new ID is not). WebKit does not quarantine downloads itself.
+       Without this, Gatekeeper never prompts and Pane is a malware vector.
+       See docs/research/2026-08-07-boring-floor.md -->
+  <key>LSFileQuarantineEnabled</key><true/>
+
   <key>NSCrossWebsiteTrackingUsageDescription</key>
   <string>Pane needs this to browse sites that embed cross-site content.</string>
 </dict>

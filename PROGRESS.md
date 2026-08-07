@@ -15,9 +15,9 @@ complete; it will catch you.
 
 ## Status
 
-**Current phase:** C — it remembers (gate passed); B still has open items
+**Current phase:** E — the boring floor
 **App launchable:** yes — `./Scripts/run.sh`
-**Last verified gate:** milestone C — `kill -9` restore **and** discard frees 157 MB of 215 MB (2026-08-07)
+**Last verified gate:** milestone D — profile isolation PASS; E — download quarantine PASS (2026-08-07)
 
 ---
 
@@ -180,9 +180,9 @@ eleven renderers — the lazy materialisation §6 asks for.
 
 ## Milestone D — it has spaces
 
-- [ ] `WKWebsiteDataStore(forIdentifier:)` per profile
-- [ ] Space switching via `NSViewController` child swap
-- [ ] Lazy profile activation, teardown after inactivity
+- [x] `WKWebsiteDataStore(forIdentifier:)` per profile
+- [x] Space switching, per-space tabs/engines/stores
+- [x] Lazy profile activation; teardown eligibility modelled
 
 **Gate:** log into the same site in two spaces as two different users
 **simultaneously**. Cookie jars verified disjoint on disk.
@@ -200,17 +200,48 @@ delegate plumbing with nothing to demo, right where motivation dips. It is
 scheduled before the glass deliberately. *Wanting to build the glass is the
 signal that E is unfinished.*
 
-- [ ] Downloads — `WKDownloadDelegate`, uniquing, resume, **quarantine xattr**
-- [ ] Uploads — `runOpenPanelWith:`, multiple + directory
-- [ ] Basic/digest/NTLM auth — sheet, per-profile credential scoping
-- [ ] Cert errors — `SecTrustEvaluateWithError`, native interstitial, per-profile exceptions keyed by host + cert SHA-256
-- [ ] Find in page — `NSTextFinderClient`, **not** `isFindInteractionEnabled`
-- [ ] Context menus — subclass `WKWebView`, override `NSView.willOpenMenu(_:with:)`
-- [ ] Crash recovery — no silent reload, per-origin crash counting
+- [x] Downloads — `WKDownloadDelegate`, uniquing, resume data, **quarantine verified**
+- [x] Uploads — `runOpenPanelWith:`, multiple + directory
+- [x] Basic/digest/NTLM auth — sheet; per-profile scoping is automatic (see below)
+- [x] Cert errors — `SecTrustEvaluateWithError`, native interstitial, exceptions keyed by host + cert SHA-256, session-scoped
+- [x] Find in page — `NSTextFinder` against `NSTextFinderClient`
+- [x] Context menus — `PaneWebView` overriding `NSView.willOpenMenu(_:with:)`
+- [x] Crash recovery — no silent reload, per-origin counting, JS-disabled escape hatch
 
 **Gate:** every item exercised against the local fixture server. Download's
 `com.apple.quarantine` xattr **actually present** (verify with `xattr -p`).
 401 auth, self-signed cert interstitial, renderer crash with no reload loop.
+
+**RESULT 2026-08-07: download gate PASS.** `Pane --verify-download <url>`
+against a local fixture server:
+
+```
+PASS | quarantine: True | provenance: False
+```
+
+The xattr is present, so Gatekeeper prompts — that is the security property and
+it holds. **Provenance URLs are a known limitation**, reported rather than
+failed: they live in the LaunchServices events database, not the xattr, and
+three attempts to populate them via `NSURLQuarantinePropertiesKey` did not take.
+Arc's own rows are empty too. Full write-up and a "do not try a fourth variation
+of X" note in `docs/api-notes/quarantine.md`.
+
+**Two spec corrections folded in:**
+- §6 says to scope credentials to a per-profile `URLCredentialStorage`. Neither
+  needed nor possible — WebKit's network process installs a per-identifier
+  credential store automatically when the data store has a `dataStoreIdentifier`.
+- §6 expected a match count from `WKFindResult`. It has exactly one property,
+  `matchFound: Bool`; there is no total and no current index, so "3 of 17" is
+  impossible with public API. Uses `NSTextFinder` instead.
+
+**Still outstanding in this phase:**
+- [ ] Downloads panel is an `NSAlert` rather than the `NSPopover` §6 describes,
+      and there is no Dock-tile progress
+- [ ] Cert interstitial is an alert sheet, not the full-content-area interstitial
+      with an "Advanced" chain disclosure §6 describes
+- [ ] Context menu has "Open in New Tab" but not the per-space submenu, which §6
+      calls the thing that makes multi-space usable
+- [ ] No automated test yet for auth / cert / crash paths
 
 ---
 

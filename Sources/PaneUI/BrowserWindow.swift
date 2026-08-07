@@ -55,6 +55,12 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
     private let reloadButton = NSButton()
     private var sidebarWidth: NSLayoutConstraint!
     private var sweepTimer: Timer?
+    public let downloads = DownloadManager()
+    private var findBar: NSTextFinder?
+    /// spec §6 — crash counting per origin. Three in five minutes is a bad
+    /// page, not a bad browser, and reloading into it forever is the failure
+    /// mode the spec names.
+    private var crashes: [String: [Date]] = [:]
     private var saveTimer: Timer?
     private let store: Store?
     /// Where the session lives. Under Application Support so it survives, and
@@ -311,6 +317,15 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
         guard let tab = model[id] else { return nil }
         let e = WKWebEngine(dataStore: store(forSpace: spaceID))
         e.onEvent = { [weak self] ev in self?.handle(ev, from: id) }
+        e.onDownload = { [weak self] dl, page in self?.downloads.attach(dl, pageURL: page) }
+        e.onOpenInNewTab = { [weak self] url in
+            guard let self else { return }
+            self.dispatch(.newTab(kind: .ephemeral))
+            self.dispatch(.navigate(url.absoluteString))
+        }
+        e.authHandler = { [weak self] challenge in
+            await AuthChallengeHandler.respond(to: challenge, window: self?.window)
+        }
         engines[id] = e
         // spec §4: assign interactionState BEFORE the view enters the hierarchy.
         if let blob = states[id] {
@@ -376,14 +391,23 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
                let u { addressBar.stringValue = URLNormalizer.display(u) }
             sidebar.model = model
             syncChrome()
-        case .didFinish, .didCommit:
+        case .didFinish(let u, _):
+            syncChrome()
+            // Fetch the favicon once the page has actually committed, so we do
+            // not chase redirects.
+            if let u {
+                FaviconFetcher.shared.fetch(for: u) { [weak self] _ in
+                    guard let self else { return }
+                    self.sidebar.reloadRows()
+                }
+            }
+        case .didCommit:
             syncChrome()
         case .didFail(_, let message):
             progress.isHidden = true
             if id == model.selected { presentError(message) }
         case .contentProcessDidTerminate:
-            // spec §6: never silently reload.
-            if id == model.selected { presentError("This page stopped responding.") }
+            handleRendererCrash(for: id)
         default: break
         }
     }
@@ -395,6 +419,102 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
     /// left the title bar and address bar showing the *previous* tab's page —
     /// visible in the first sidebar screenshot as "DuckDuckGo" in the title
     /// while Hacker News was selected.
+    /// spec §6 — never silently reload; that is how an infinite crash loop on
+    /// a bad page happens. Count per origin and escalate the offer.
+    private func handleRendererCrash(for id: TabID) {
+        let origin = model[id]?.url?.host ?? "unknown"
+        let now = Date()
+        crashes[origin, default: []].append(now)
+        crashes[origin] = crashes[origin]?.filter { now.timeIntervalSince($0) < 300 }
+        let recent = crashes[origin]?.count ?? 1
+
+        guard id == model.selected, let window else { return }
+        let alert = NSAlert()
+        alert.messageText = "This page stopped responding"
+        if recent >= 3 {
+            alert.informativeText = "“\(origin)” has crashed \(recent) times in the last five minutes."
+            alert.addButton(withTitle: "Reload Without JavaScript")
+            alert.addButton(withTitle: "Close Tab")
+            alert.addButton(withTitle: "Cancel")
+        } else {
+            alert.informativeText = "Pane did not reload it automatically, because a page that crashes on load would loop forever."
+            alert.addButton(withTitle: "Reload")
+            alert.addButton(withTitle: "Cancel")
+        }
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard let self else { return }
+            if recent >= 3 {
+                switch response {
+                case .alertFirstButtonReturn:  self.reloadWithoutJavaScript(id)
+                case .alertSecondButtonReturn: self.dispatch(.closeTab(id))
+                default: break
+                }
+            } else if response == .alertFirstButtonReturn {
+                self.engines[id]?.reload()
+            }
+        }
+    }
+
+    /// spec §6 — "offer to open it in a fresh renderer with JS disabled".
+    private func reloadWithoutJavaScript(_ id: TabID) {
+        guard let url = model[id]?.url else { return }
+        teardown(id)
+        let e = WKWebEngine(dataStore: store(forSpace: spaceID), allowsJavaScript: false)
+        e.onEvent = { [weak self] ev in self?.handle(ev, from: id) }
+        engines[id] = e
+        e.load(url)
+        showSelected()
+    }
+
+    // MARK: - Find in page (spec §6)
+    //
+    // The spec expected a match count from WKFindResult. It has exactly one
+    // property, matchFound: Bool — there is no total and no current index, so
+    // the "3 of 17" counter is impossible with public API. AppKit's NSTextFinder
+    // against WKWebView's NSTextFinderClient conformance gives the native find
+    // bar instead. See docs/research/2026-08-07-boring-floor.md.
+    /// spec §6 — an NSPopover off the toolbar, AppKit not web content.
+    @objc public func showDownloadsPanel() {
+        guard let window else { return }
+        let alert = NSAlert()
+        alert.messageText = "Downloads"
+        if downloads.items.isEmpty {
+            alert.informativeText = "Nothing downloaded yet."
+        } else {
+            alert.informativeText = downloads.items.reversed().map { item -> String in
+                if let f = item.failure { return "✗  \(item.filename) — \(f)" }
+                if item.isFinished {
+                    let q = item.destination.map { DownloadManager.hasQuarantine($0) ? " (quarantined)" : " (NOT quarantined)" } ?? ""
+                    return "✓  \(item.filename)\(q)"
+                }
+                let pct = item.totalBytes > 0
+                    ? Int(Double(item.bytesWritten) / Double(item.totalBytes) * 100) : 0
+                return "↓  \(item.filename) — \(pct)%"
+            }.joined(separator: "\n")
+        }
+        alert.addButton(withTitle: "Done")
+        if !downloads.items.isEmpty { alert.addButton(withTitle: "Show in Finder") }
+        alert.beginSheetModal(for: window) { [weak self] r in
+            guard r == .alertSecondButtonReturn,
+                  let last = self?.downloads.items.last?.destination else { return }
+            NSWorkspace.shared.activateFileViewerSelecting([last])
+        }
+    }
+
+    @objc public func performFind() {
+        guard let web = currentEngine?.webView else { return }
+        if findBar == nil {
+            let finder = NSTextFinder()
+            finder.client = web
+            finder.findBarContainer = contentBox as? NSTextFinderBarContainer
+            findBar = finder
+        }
+        findBar?.performAction(.showFindInterface)
+    }
+
+    @objc public func findNext() { findBar?.performAction(.nextMatch) }
+    @objc public func findPrevious() { findBar?.performAction(.previousMatch) }
+
     private func syncChrome() {
         let e = currentEngine
         backButton.isEnabled = e?.canGoBack ?? false
