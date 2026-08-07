@@ -134,7 +134,8 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
             addressBar.currentEditor()?.selectAll(nil)
 
         case .newTab(let kind):
-            let id = model.open(Tab(kind: kind, url: URLNormalizer.homeURL, lastActiveAt: Date()))
+            let id = model.open(Tab(kind: kind, url: URLNormalizer.homeURL, lastActiveAt: Date()),
+                                select: !Mutants.isActive("tabs.no_select_on_new"))
             _ = engine(for: id)
             showSelected()
             dispatch(.focusAddressBar)
@@ -150,6 +151,7 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
             showSelected()
 
         case .reopenClosedTab:
+            guard !Mutants.isActive("tabs.reopen_is_noop") else { return }
             if model.reopenLastClosed() != nil { showSelected() }
 
         case .toggleSidebar:
@@ -194,11 +196,11 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
             persistSpaces()
 
         case .nextSpace:
-            spaceModel.cycle(by: 1)
+            spaceModel.cycle(by: 1, wrap: !Mutants.isActive("spaces.cycle_clamps"))
             ensureSpaceHasTab()
 
         case .previousSpace:
-            spaceModel.cycle(by: -1)
+            spaceModel.cycle(by: -1, wrap: !Mutants.isActive("spaces.cycle_clamps"))
             ensureSpaceHasTab()
 
         case .selectTabIndex(let n):
@@ -438,9 +440,10 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
             states[id] = blob
             if let store { Task { try? await store.saveSnapshot(id, state: blob) } }
         }
+        model.markDiscarded(id)
+        guard !Mutants.isActive("lifecycle.discard_keeps_engine") else { return }
         e.webView.removeFromSuperview()
         engines[id] = nil
-        model.markDiscarded(id)
     }
 
     private func teardown(_ id: TabID) {
@@ -762,4 +765,11 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
     public func forceSweepForBench() { dispatch(.sweepDiscardableForced) }
     public var liveEngineCount: Int { engines.count }
     public var tabCount: Int { model.tabs.count }
+    /// Read-only accessors for scenarios. Deliberately queries, not handles:
+    /// a scenario that could mutate the model directly would stop exercising
+    /// the command bus, which is the whole point (ADR 0006).
+    public var selectedTabID: TabID? { model.selected }
+    public var selectedURL: URL? { model.selectedTab?.url ?? currentEngine?.currentURL }
+    public var currentSpaceName: String? { spaceModel.currentSpace?.name }
+    public func tabCount(ofKind kind: TabKind) -> Int { model.section(kind).count }
 }

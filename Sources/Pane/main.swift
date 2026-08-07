@@ -1,5 +1,6 @@
 // spec: §1
 import AppKit
+import PaneCore
 import PaneUI
 import PaneHarness
 
@@ -8,7 +9,15 @@ import PaneHarness
 let args = CommandLine.arguments
 
 if args.contains("--selftest") {
-    exit(Harness.runSelfTest())
+    // Needs a real run loop: scenarios drive WKWebViews and AppKit.
+    let app = NSApplication.shared
+    app.setActivationPolicy(.accessory)
+    let json = args.contains("--json")
+    if let i = args.firstIndex(of: "--mutate"), i + 1 < args.count {
+        Mutants.arm(args[i + 1])
+    }
+    Task { @MainActor in exit(await Harness.runSelfTest(json: json)) }
+    app.run()
 }
 
 // Milestone A's gate. Needs a real run loop, so it drives NSApplication rather

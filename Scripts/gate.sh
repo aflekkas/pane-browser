@@ -39,22 +39,31 @@ fi
 
 if [ "$MODE" = phase ] && [ -f .build/debug/Pane ]; then
   step "scenarios"
-  ./Scripts/fixtures.sh start
-  .build/debug/Pane --selftest --json || FAIL=1
+  .build/debug/Pane --selftest || FAIL=1
 
   step "mutation canary"
-  # A green suite that cannot detect a planted bug proves nothing. This step
-  # FAILS IF THE SUITE PASSES.
-  M=$(python3 -c "import json,random;m=json.load(open('Harness/mutants.json'));print(random.choice(m)['id'])" 2>/dev/null || echo "")
-  if [ -n "$M" ]; then
+  # A green suite that cannot detect a planted bug proves nothing. Each step
+  # here FAILS IF THE SUITE PASSES. Every mutant is run, not a sample: there
+  # are only four and they take seconds, and sampling means a broken scenario
+  # can hide for days.
+  while read -r M; do
+    [ -z "$M" ] && continue
     if .build/debug/Pane --selftest --mutate "$M" >/dev/null 2>&1; then
-      printf '\033[31mFAIL\033[0m suite PASSED with mutant %s planted — it proves nothing\n' "$M"; FAIL=1
-    else printf '\033[32m ok \033[0m suite caught mutant %s\n' "$M"; fi
-  fi
+      printf '\033[31mFAIL\033[0m suite PASSED with mutant %s planted — it proves nothing\n' "$M"
+      FAIL=1
+    else
+      printf '\033[32m ok \033[0m caught mutant %s\n' "$M"
+    fi
+  done < <(python3 -c "import json;[print(m['id']) for m in json.load(open('Harness/mutants.json'))]" 2>/dev/null)
 
-  step "benchmarks"
-  ./Scripts/bench.sh || FAIL=1
-  ./Scripts/fixtures.sh stop
+  step "restore latency (spec §9 gate)"
+  .build/debug/Pane --bench-restore --iterations 20 || FAIL=1
+
+  step "discard reclaims memory (spec §4)"
+  ./Scripts/bench-discard.sh 6 || FAIL=1
+
+  step "profile isolation (spec §3)"
+  .build/debug/Pane --verify-isolation >/dev/null || FAIL=1
 fi
 
 # ---------------------------------------------------------------------------

@@ -123,12 +123,13 @@ public struct SpaceModel: Sendable {
         current = id
     }
 
-    public mutating func cycle(by delta: Int) {
+    public mutating func cycle(by delta: Int, wrap: Bool = true) {
         guard !spaces.isEmpty, let current,
               let i = spaces.firstIndex(where: { $0.id == current }) else { return }
-        // Wrap, because a switcher that dead-ends at the last space feels broken.
         let n = spaces.count
-        self.current = spaces[((i + delta) % n + n) % n].id
+        // Wrap, because a switcher that dead-ends at the last space feels broken.
+        let target = wrap ? ((i + delta) % n + n) % n : max(0, min(n - 1, i + delta))
+        self.current = spaces[target].id
     }
 
     /// Drag reorder for the space strip.
