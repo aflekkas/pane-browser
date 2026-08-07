@@ -142,7 +142,11 @@ Passing:
       all (`NSScrollView` is layer-backed; `cacheDisplay` skips it). Five
       approaches tried and recorded in `docs/api-notes/appkit.md`. Until this
       works, `gate.sh` must keep listing visual goldens under "NOT proven".
-- [ ] 200-row scroll performance measurement
+- [x] **200-row scroll: PASS.** p50 3.0ms, p95 4.7ms against an 8ms half-frame
+      budget. Result in `docs/research/2026-08-07-sidebar-scroll-result.md`.
+      Note it establishes "AppKit is fast enough", NOT "faster than SwiftUI" —
+      that comparison was never run and the invariant forbids building the
+      SwiftUI version to find out.
 
 > Correction folded in: `NSOutlineViewDiffableDataSource` does not exist.
 > See `docs/research/2026-08-07-architecture.md`.

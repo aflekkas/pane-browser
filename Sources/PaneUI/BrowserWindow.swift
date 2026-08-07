@@ -819,5 +819,7 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
     public var selectedURL: URL? { model.selectedTab?.url ?? currentEngine?.currentURL }
     public var currentSpaceName: String? { spaceModel.currentSpace?.name }
     public var selectedPageTitle: String? { currentEngine?.title }
+    /// Exposed for the §5 scroll benchmark only.
+    public var sidebarOutlineViewForBench: NSOutlineView? { sidebar.outlineViewForBench }
     public func tabCount(ofKind kind: TabKind) -> Int { model.section(kind).count }
 }

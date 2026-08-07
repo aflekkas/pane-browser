@@ -41,6 +41,7 @@ public final class SidebarController: NSViewController {
     public var onTabCommand: ((Command) -> Void)?
 
     private let outline = NSOutlineView()
+    public var outlineViewForBench: NSOutlineView { outline }
     private let spaceBar = NSStackView()
     /// Filled by the window controller with nav buttons and the address field.
     /// Arc and Zen both put the URL bar *inside* the sidebar, which is what

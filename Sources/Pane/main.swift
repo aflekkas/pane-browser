@@ -55,6 +55,14 @@ if let i = args.firstIndex(of: "--verify-download"), i + 1 < args.count,
     app.run()
 }
 
+if args.contains("--bench-scroll") {
+    let app = NSApplication.shared
+    app.setActivationPolicy(.accessory)
+    let n = args.firstIndex(of: "--rows").map { Int(args[$0 + 1]) ?? 200 } ?? 200
+    Task { @MainActor in exit(await ScrollBench.run(rows: n)) }
+    app.run()
+}
+
 if args.contains("--drm-probe") {
     let app = NSApplication.shared
     app.setActivationPolicy(.accessory)
