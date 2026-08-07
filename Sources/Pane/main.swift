@@ -39,6 +39,9 @@ let delegate = AppDelegate()
 delegate.seedDemoTabs = args.contains("--seed-demo")
 delegate.restoreSession = !args.contains("--no-restore")
 if let i = args.firstIndex(of: "--store"), i + 1 < args.count { delegate.storePath = args[i + 1] }
+if let i = args.firstIndex(of: "--bench-discard"), i + 1 < args.count {
+    delegate.benchDiscardTabs = Int(args[i + 1]); delegate.restoreSession = false
+}
 if let i = args.firstIndex(of: "--capture"), i + 1 < args.count {
     delegate.captureTo = args[i + 1]
     delegate.onReadyForCapture = { w, path in Capture.windowByID(w, to: path) }

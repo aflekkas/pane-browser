@@ -11,6 +11,9 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     public var seedDemoTabs = false
     public var storePath: String?
     public var restoreSession = true
+    /// Number of tabs to open for the discard benchmark, all on a local fixture
+    /// so the measurement is of Pane rather than of the network.
+    public var benchDiscardTabs: Int?
     /// Where to write an in-app window capture once seeding settles, then exit.
     public var captureTo: String?
     public var onReadyForCapture: ((NSWindow, String) -> Bool)?
@@ -25,6 +28,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.activate(ignoringOtherApps: true)
         controller = c
         if seedDemoTabs { seed(c) }
+        if let n = benchDiscardTabs { runDiscardBench(c, tabs: n) }
         if let path = captureTo, let w = c.window {
             // Give the seeded pages time to paint before capturing.
             Task { @MainActor in
@@ -95,6 +99,30 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         ] as [(TabKind, String)] {
             c.dispatch(.newTab(kind: kind))
             c.dispatch(.navigate(url))
+        }
+    }
+
+    /// spec §4 — the measurement the memory claim actually rests on.
+    /// Prints markers the shell driver measures around; it cannot attribute
+    /// WebContent memory itself, because those processes are launchd-owned
+    /// (PPID 1), not our children.
+    private func runDiscardBench(_ c: BrowserWindowController, tabs n: Int) {
+        let fixture = URL(fileURLWithPath: "Fixtures/bench-page.html").standardizedFileURL
+        for _ in 0..<n {
+            c.dispatch(.newTab(kind: .ephemeral))
+            c.dispatch(.navigate(fixture.absoluteString))
+        }
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(10))
+            print("BENCH_LOADED tabs=\(c.tabCount) engines=\(c.liveEngineCount)")
+            fflush(stdout)
+            try? await Task.sleep(for: .seconds(6))
+            c.forceSweepForBench()
+            try? await Task.sleep(for: .seconds(6))
+            print("BENCH_DISCARDED tabs=\(c.tabCount) engines=\(c.liveEngineCount)")
+            fflush(stdout)
+            try? await Task.sleep(for: .seconds(6))
+            exit(0)
         }
     }
 

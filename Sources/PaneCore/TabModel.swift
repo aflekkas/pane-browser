@@ -92,11 +92,15 @@ public struct TabModel: Sendable {
     ///
     /// The selected tab is never eligible — discarding what the user is looking
     /// at would be visible, and no memory policy is worth that.
-    public func discardCandidates(at now: Date) -> [TabID] {
+    /// `force` skips only the *idle* threshold. The never-discard conditions
+    /// and the selected-tab rule still apply — a benchmark that discards things
+    /// the product would never discard measures nothing the product does.
+    public func discardCandidates(at now: Date, force: Bool = false) -> [TabID] {
         tabs.filter { t in
             guard t.lifecycle == .live else { return false }
             guard t.id != selected else { return false }
             guard t.isDiscardable else { return false }
+            if force { return true }
             return now.timeIntervalSince(t.lastActiveAt) >= t.idleBeforeDiscard
         }.map(\.id)
     }

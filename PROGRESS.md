@@ -17,7 +17,7 @@ complete; it will catch you.
 
 **Current phase:** C — it remembers (gate passed); B still has open items
 **App launchable:** yes — `./Scripts/run.sh`
-**Last verified gate:** milestone C — survived `kill -9`, 11/11 tabs restored (2026-08-07)
+**Last verified gate:** milestone C — `kill -9` restore **and** discard frees 157 MB of 215 MB (2026-08-07)
 
 ---
 
@@ -169,9 +169,11 @@ after relaunch: tabs=11  snapshots=11   (11th is the new-tab from the fresh run)
 eleven renderers — the lazy materialisation §6 asks for.
 
 **Still outstanding in this phase:**
-- [ ] The explicit discard-then-measure benchmark (`phys_footprint` before/after
-      a forced sweep, plus `vm_stat` to prove the pages were freed rather than
-      merely compressed). The 33 MB figure above is suggestive, not that proof.
+- [x] **The discard-then-measure benchmark: PASS.** `./Scripts/bench-discard.sh 8`
+      — 9 tabs / 9 WebContent processes / 215 MB → 1 process / 58 MB.
+      **157 MB freed (73%).** Compressor pages went *down* by 54, so the memory
+      was genuinely released rather than squeezed. Full result in
+      `docs/research/2026-08-07-discard-memory-result.md`.
 - [ ] Thumbnail capture on discard
 
 ---

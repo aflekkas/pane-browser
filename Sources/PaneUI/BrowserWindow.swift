@@ -116,6 +116,9 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
 
         case .sweepDiscardable:
             for id in model.discardCandidates(at: Date()) { discard(id) }
+
+        case .sweepDiscardableForced:
+            for id in model.discardCandidates(at: Date(), force: true) { discard(id) }
         }
         sidebar.model = model
         syncChrome()
@@ -407,7 +410,7 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
     @objc public func toggleSide()  { dispatch(.toggleSidebar) }
 
     /// spec §4 — used by the benchmark to force a sweep deterministically.
-    public func forceSweepForBench() { dispatch(.sweepDiscardable) }
+    public func forceSweepForBench() { dispatch(.sweepDiscardableForced) }
     public var liveEngineCount: Int { engines.count }
     public var tabCount: Int { model.tabs.count }
 }

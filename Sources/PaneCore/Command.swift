@@ -24,4 +24,6 @@ public enum Command: Equatable, Sendable {
     /// spec §4 — force the discard sweep now rather than waiting for the timer.
     /// Exists so the benchmark and scenarios can exercise discard deterministically.
     case sweepDiscardable
+    /// Ignore idle thresholds; never-discard conditions still apply.
+    case sweepDiscardableForced
 }
