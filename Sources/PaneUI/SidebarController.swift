@@ -137,7 +137,12 @@ public final class SidebarController: NSViewController {
         outline.dataSource = self
         outline.delegate = self
         outline.backgroundColor = .clear
-        outline.style = .inset
+        // .plain, not .inset: .inset silently pushes every cell 16pt in from the
+        // row's leading edge and pads 10pt above the first row. Measured with a
+        // live probe, not guessed — it was fighting every inset set in
+        // SidebarRows and is why nothing lined up with the header.
+        outline.style = .plain
+        outline.intercellSpacing = NSSize(width: 0, height: 2)
         outline.usesAutomaticRowHeights = false
         outline.target = self
         outline.doubleAction = #selector(noop)

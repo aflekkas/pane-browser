@@ -387,3 +387,56 @@ applied* is now part of how I verify a check.
 
 **Also landed:** the §5 scroll claim is measured (p95 4.7ms at 201 rows), the
 fixture server exists, and the per-space context submenu is in.
+
+## 2026-08-07 (17:00) — UI pass via multi-agent critique, and a regression I reverted
+
+**What happened.** Ran six agents over the sidebar against Zen's source and the
+Arc references, plus a synthesis. It was the right tool: several findings were
+things I could not have seen by reading my own code, because they were about
+what the code *does not do*.
+
+**The two best findings were functional, not cosmetic:**
+
+1. **Selecting an essential never repainted the grid.** `rebuild()` early-returns
+   when `next == rows`, and `Row.essentialsRow` compared by TabIDs only — so
+   clicking an essential produced no visible change at all. A row's equality has
+   to cover everything it draws.
+2. **`PillRowView.isHovered` had no writer anywhere in the tree.** The hover
+   highlight was written, committed, and ticked off on the parity checklist, and
+   the branch had never executed. Dead code that reads as a finished feature is
+   worse than an empty function.
+
+And one measured with a live probe I would never have thought to run:
+`NSOutlineView.style = .inset` silently pushes every cell **16pt** in from the
+row's leading edge. Every inset in `SidebarRows` had been fighting it, which is
+why nothing lined up with the header.
+
+**Also caught:** `isEmphasized` is the wrong signal for the selection pill — it
+goes false the instant the WKWebView takes first responder, i.e. one click into
+normal browsing. So the pill spent almost all its life drawing its inactive
+state. Key-window state is what "which tab am I on" actually means. (Applied,
+then reverted with the batch below; re-apply it deliberately.)
+
+**Regression, reverted rather than pushed.** The last batch of row changes made
+the sidebar stop rendering entirely — 105 distinct colours down to near-black.
+I did not diagnose it: the responsible move at the end of a session is to revert
+to a verified-good state, not to push something broken and leave the next
+session to bisect it. `git checkout -- Sources/PaneUI/SidebarRows.swift`,
+recaptured, confirmed 105 colours and a correct-looking sidebar.
+
+**A process failure worth recording.** Several of my `python3` string-replace
+edits silently matched nothing — I had targeted `BrowserWindow.swift` for
+constraints that live in `SidebarController.swift`. A replace that matches
+nothing succeeds silently, so the build stayed green and I believed changes had
+landed that had not. Two earlier `sed` perturbation tests failed the same way
+and reported a comforting 0.0 diff. **Any edit-by-replace should assert it
+matched**, the same way the mutation canary asserts a planted defect was caught.
+
+**Still open for the next session** (all in `docs/ui-parity.md` and the workflow
+output at `.../wf_335d6aea-9ef`):
+- Re-apply the `isKeyWindow` selection signal and the close-button overlay
+  (title width 134pt → 185pt, 18 → 25 characters) — carefully, one at a time,
+  capturing after each.
+- Hover tracking dies on every `reloadData`, i.e. every favicon arrival.
+- Address field text sits hard against the top of its box; the agent's fix is a
+  drawn container rather than a bezel-less NSTextField.

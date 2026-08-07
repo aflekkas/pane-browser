@@ -826,8 +826,16 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
         addressBar.focusRingType = .none
         addressBar.font = .systemFont(ofSize: 12.5)
         addressBar.textColor = .labelColor
+        // An NSTextField draws single-line text hard against the TOP of its
+        // frame regardless of height, so a 26pt box left the URL glued to the
+        // ceiling with 14pt of dead air under it. Centre it by making the cell
+        // the same height as the text and pinning by centreY instead.
+        addressBar.usesSingleLineMode = true
+        addressBar.lineBreakMode = .byTruncatingTail
         addressBar.wantsLayer = true
-        addressBar.layer?.cornerRadius = 8
+        // 10 matches Zen's --border-radius-medium, which the rows and pills
+        // already use; 8 made the field the one element with its own radius.
+        addressBar.layer?.cornerRadius = 10
         addressBar.cell?.usesSingleLineMode = true
 
         progress.translatesAutoresizingMaskIntoConstraints = false
@@ -873,14 +881,17 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
             navRow.leadingAnchor.constraint(equalTo: header.leadingAnchor, constant: 76),
             navRow.heightAnchor.constraint(equalToConstant: 22),
 
-            addressBar.topAnchor.constraint(equalTo: header.topAnchor, constant: 34),
+            addressBar.centerYAnchor.constraint(equalTo: header.topAnchor, constant: 48),
             addressBar.leadingAnchor.constraint(equalTo: header.leadingAnchor, constant: 10),
             addressBar.trailingAnchor.constraint(equalTo: header.trailingAnchor, constant: -10),
-            addressBar.heightAnchor.constraint(equalToConstant: 26),
+            // 20, not 17: a 12.5pt font needs room for ascenders and
+            // descenders, and 17 clipped the glyph tops. Still centred on the
+            // header so it does not drift back to the top of its own box.
+            addressBar.heightAnchor.constraint(equalToConstant: 20),
 
             progress.leadingAnchor.constraint(equalTo: header.leadingAnchor, constant: 10),
             progress.trailingAnchor.constraint(equalTo: header.trailingAnchor, constant: -10),
-            progress.topAnchor.constraint(equalTo: addressBar.bottomAnchor, constant: 2),
+            progress.topAnchor.constraint(equalTo: addressBar.bottomAnchor, constant: 6),
             progress.heightAnchor.constraint(equalToConstant: 2),
 
             divider.leadingAnchor.constraint(equalTo: side.trailingAnchor),
