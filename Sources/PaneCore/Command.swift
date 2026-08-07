@@ -26,6 +26,10 @@ public enum Command: Equatable, Sendable {
     case renameSpace(String, String)
     case setSpaceIcon(String, String?)
     case deleteSpace(String)
+    case nextSpace
+    case previousSpace
+    /// 1-based; ⌘1…⌘9 select the nth tab, ⌘9 the last, as every browser does.
+    case selectTabIndex(Int)
     /// spec §4 — force the discard sweep now rather than waiting for the timer.
     /// Exists so the benchmark and scenarios can exercise discard deterministically.
     case sweepDiscardable

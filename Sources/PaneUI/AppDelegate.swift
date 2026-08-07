@@ -90,6 +90,30 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         viewItem.submenu = viewMenu
         main.addItem(viewItem)
 
+        // Space switching. ⌃⇥ / ⌃⇧⇥ is what Arc and Zen use.
+        let spacesItem = NSMenuItem()
+        let spacesMenu = NSMenu(title: "Spaces")
+        let nextSpace = NSMenuItem(title: "Next Space", action: #selector(nextSpace), keyEquivalent: "]")
+        nextSpace.keyEquivalentModifierMask = [.command, .shift]
+        spacesMenu.addItem(nextSpace)
+        let prevSpace = NSMenuItem(title: "Previous Space", action: #selector(prevSpace), keyEquivalent: "[")
+        prevSpace.keyEquivalentModifierMask = [.command, .shift]
+        spacesMenu.addItem(prevSpace)
+        spacesItem.submenu = spacesMenu
+        main.addItem(spacesItem)
+
+        // ⌘1…⌘9 select tabs, ⌘9 the last — matching every other browser.
+        let tabsItem = NSMenuItem()
+        let tabsMenu = NSMenu(title: "Tabs")
+        for n in 1...9 {
+            let mi = NSMenuItem(title: n == 9 ? "Last Tab" : "Tab \(n)",
+                                action: #selector(selectTabN(_:)), keyEquivalent: "\(n)")
+            mi.tag = n
+            tabsMenu.addItem(mi)
+        }
+        tabsItem.submenu = tabsMenu
+        main.addItem(tabsItem)
+
         NSApp.mainMenu = main
     }
 
@@ -136,6 +160,11 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    @objc private func nextSpace()   { controller?.dispatch(.nextSpace) }
+    @objc private func prevSpace()   { controller?.dispatch(.previousSpace) }
+    @objc private func selectTabN(_ sender: NSMenuItem) {
+        controller?.dispatch(.selectTabIndex(sender.tag))
+    }
     @objc private func findInPage()  { controller?.performFind() }
     @objc private func findNext()    { controller?.findNext() }
     @objc private func findPrev()    { controller?.findPrevious() }

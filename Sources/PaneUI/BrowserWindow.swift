@@ -186,6 +186,23 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
             sidebar.spaces = spaceModel
             persistSpaces()
 
+        case .nextSpace:
+            spaceModel.cycle(by: 1)
+            ensureSpaceHasTab()
+
+        case .previousSpace:
+            spaceModel.cycle(by: -1)
+            ensureSpaceHasTab()
+
+        case .selectTabIndex(let n):
+            // ⌘9 is "last", matching Safari and Chrome.
+            let all = model.section(.essential) + model.section(.pinned) + model.section(.ephemeral)
+            guard !all.isEmpty else { return }
+            let target = n >= 9 ? all.count - 1 : min(n - 1, all.count - 1)
+            guard target >= 0 else { return }
+            model.select(all[target].id, at: Date())
+            showSelected()
+
         case .deleteSpace(let id):
             guard spaceModel.spaces.count > 1 else { return }
             spaceModel.removeSpace(id)
@@ -208,6 +225,16 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
         sidebar.model = model
         syncChrome()
         scheduleSave()
+    }
+
+    /// Switching into an empty space should land somewhere, not on a void.
+    private func ensureSpaceHasTab() {
+        if model.tabs.isEmpty {
+            let id = model.open(Tab(kind: .ephemeral, url: URLNormalizer.homeURL, lastActiveAt: Date()))
+            _ = engine(for: id)
+        }
+        showSelected()
+        sidebar.spaces = spaceModel
     }
 
     /// spec §3 — spaces are loaded from the store, or a single default space is

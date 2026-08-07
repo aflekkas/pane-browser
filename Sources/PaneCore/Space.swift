@@ -110,6 +110,22 @@ public struct SpaceModel: Sendable {
         current = id
     }
 
+    public mutating func cycle(by delta: Int) {
+        guard !spaces.isEmpty, let current,
+              let i = spaces.firstIndex(where: { $0.id == current }) else { return }
+        // Wrap, because a switcher that dead-ends at the last space feels broken.
+        let n = spaces.count
+        self.current = spaces[((i + delta) % n + n) % n].id
+    }
+
+    /// Drag reorder for the space strip.
+    public mutating func move(_ id: String, to index: Int) {
+        guard let from = spaces.firstIndex(where: { $0.id == id }) else { return }
+        let moving = spaces.remove(at: from)
+        spaces.insert(moving, at: max(0, min(index, spaces.count)))
+        for (i, _) in spaces.enumerated() { spaces[i].sortIndex = i }
+    }
+
     public mutating func load(spaces: [Space], profiles: [Profile]) {
         self.spaces = spaces.sorted { $0.sortIndex < $1.sortIndex }
         self.profiles = Dictionary(uniqueKeysWithValues: profiles.map { ($0.id, $0) })

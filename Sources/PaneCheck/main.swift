@@ -29,5 +29,6 @@ check.suite("URLNormalizer") { e in
 
 tabModelChecks(check)
 await storeChecks(check)
+spaceChecks(check)
 
 exit(check.run())
