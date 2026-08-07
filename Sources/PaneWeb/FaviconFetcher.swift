@@ -15,11 +15,25 @@ public final class FaviconFetcher {
     private var cache: [String: NSImage] = [:]
     private var inFlight: Set<String> = []
 
-    private init() {}
+    private init() {
+        // Warm from disk in one pass at launch, so a restored session renders
+        // its icons immediately rather than as a column of grey globes that
+        // fills in over a second while the network is hit for things we
+        // already knew (spec §2).
+        cache = FaviconStore.loadAll()
+        FaviconStore.prune()
+    }
 
     public func icon(for url: URL) -> NSImage? {
         guard let host = url.host else { return nil }
-        return cache[host]
+        if let hit = cache[host] { return hit }
+        // Second chance from disk: covers an icon written by a previous run
+        // after this process had already warmed its cache.
+        if let onDisk = FaviconStore.load(host: host) {
+            cache[host] = onDisk
+            return onDisk
+        }
+        return nil
     }
 
     /// Fetches if not already known. `completion` fires only on a new icon, so
@@ -45,6 +59,7 @@ public final class FaviconFetcher {
                 await MainActor.run {
                     self?.cache[host] = image
                     self?.inFlight.remove(host)
+                    FaviconStore.save(image, host: host)   // survive relaunch
                     completion(image)
                 }
                 return

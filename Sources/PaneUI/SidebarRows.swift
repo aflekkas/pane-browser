@@ -8,7 +8,12 @@ import PaneWeb
 /// nothing right now, because that is the product's whole claim (spec §4).
 @MainActor
 final class TabRowView: NSTableCellView {
-    init(tab: Tab) {
+    private let closeButton = NSButton()
+    private var trackingArea: NSTrackingArea?
+    var onClose: (() -> Void)?
+
+    init(tab: Tab, onClose: (() -> Void)? = nil) {
+        self.onClose = onClose
         super.init(frame: .zero)
 
         let icon = NSImageView()
@@ -32,23 +37,93 @@ final class TabRowView: NSTableCellView {
         label.lineBreakMode = .byTruncatingTail
         label.font = .systemFont(ofSize: 13)
         label.textColor = tab.lifecycle == .discarded ? .secondaryLabelColor : .labelColor
+        // On the accent pill the label must flip to white, or it fails contrast
+        // exactly when it matters most — on the row you are looking at.
+        label.cell?.backgroundStyle = .normal
         label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        addSubview(icon); addSubview(label)
+        // Close affordance, revealed on hover — the row should be quiet until
+        // you point at it.
+        closeButton.translatesAutoresizingMaskIntoConstraints = false
+        closeButton.image = NSImage(systemSymbolName: "xmark", accessibilityDescription: "Close tab")
+        closeButton.isBordered = false
+        closeButton.contentTintColor = .secondaryLabelColor
+        closeButton.symbolConfiguration = .init(pointSize: 9, weight: .semibold)
+        closeButton.alphaValue = 0
+        closeButton.target = self
+        closeButton.action = #selector(closeTapped)
+
+        addSubview(icon); addSubview(label); addSubview(closeButton)
         textField = label
         imageView = icon
 
         NSLayoutConstraint.activate([
-            icon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
+            closeButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
+            closeButton.centerYAnchor.constraint(equalTo: centerYAnchor),
+            closeButton.widthAnchor.constraint(equalToConstant: 16),
+            closeButton.heightAnchor.constraint(equalToConstant: 16),
+            icon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14),
             icon.centerYAnchor.constraint(equalTo: centerYAnchor),
             icon.widthAnchor.constraint(equalToConstant: 16),
             icon.heightAnchor.constraint(equalToConstant: 16),
             label.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 8),
-            label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
+            label.trailingAnchor.constraint(equalTo: closeButton.leadingAnchor, constant: -4),
             label.centerYAnchor.constraint(equalTo: centerYAnchor),
         ])
     }
     required init?(coder: NSCoder) { fatalError("not used") }
+
+    @objc private func closeTapped() { onClose?() }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let t = trackingArea { removeTrackingArea(t) }
+        let t = NSTrackingArea(rect: bounds,
+                               options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+                               owner: self)
+        addTrackingArea(t)
+        trackingArea = t
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        NSAnimationContext.runAnimationGroup {
+            $0.duration = 0.12
+            closeButton.animator().alphaValue = 1
+        }
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        NSAnimationContext.runAnimationGroup {
+            $0.duration = 0.12
+            closeButton.animator().alphaValue = 0
+        }
+    }
+}
+
+/// The selection pill. Arc draws a rounded, inset highlight rather than AppKit's
+/// full-bleed row selection; matching that is most of what makes a sidebar read
+/// as modern (docs/ui-parity.md).
+@MainActor
+final class PillRowView: NSTableRowView {
+    override func drawSelection(in dirtyRect: NSRect) {
+        guard selectionHighlightStyle != .none else { return }
+        let inset = bounds.insetBy(dx: 6, dy: 1)
+        // Zen --border-radius-medium: 10px (docs/zen-metrics.md)
+        let path = NSBezierPath(roundedRect: inset, xRadius: 10, yRadius: 10)
+        (isEmphasized ? NSColor.controlAccentColor.withAlphaComponent(0.85)
+                      : NSColor.quaternaryLabelColor.withAlphaComponent(0.6)).setFill()
+        path.fill()
+    }
+
+    /// Hover highlight, distinct from selection and much lighter.
+    var isHovered = false { didSet { needsDisplay = true } }
+    override func drawBackground(in dirtyRect: NSRect) {
+        super.drawBackground(in: dirtyRect)
+        guard isHovered, !isSelected else { return }
+        let inset = bounds.insetBy(dx: 6, dy: 1)
+        NSColor.quaternaryLabelColor.withAlphaComponent(0.28).setFill()
+        NSBezierPath(roundedRect: inset, xRadius: 10, yRadius: 10).fill()
+    }
 }
 
 /// spec §5 — Essentials are an icon grid, four per row. One outline row renders
@@ -73,27 +148,40 @@ final class EssentialsRowView: NSView {
             b.bezelStyle = .smallSquare
             b.isBordered = false
             b.wantsLayer = true
-            b.layer?.cornerRadius = 8
+            b.layer?.cornerRadius = 10   // Zen --border-radius-medium
+            b.layer?.borderWidth = model.selected == id ? 1.5 : 0
+            b.layer?.borderColor = NSColor.controlAccentColor.cgColor
             b.layer?.backgroundColor = (model.selected == id
                 ? NSColor.controlAccentColor.withAlphaComponent(0.22)
                 : NSColor.quaternaryLabelColor.withAlphaComponent(0.35)).cgColor
             if let u = tab.url, let fav = FaviconFetcher.shared.icon(for: u) {
-                b.image = fav
+                let big = fav.copy() as! NSImage
+                big.size = NSSize(width: 22, height: 22)
+                b.image = big
             } else {
                 b.image = NSImage(systemSymbolName: "square.grid.2x2", accessibilityDescription: tab.displayName)
             }
-            b.imageScaling = .scaleProportionallyDown
+            b.imageScaling = .scaleProportionallyUpOrDown
             b.toolTip = tab.displayName
             b.title = ""
             b.target = self
             b.action = #selector(tapped(_:))
             b.identifier = NSUserInterfaceItemIdentifier(id.raw.uuidString)
             b.alphaValue = tab.lifecycle == .discarded ? 0.55 : 1.0
+            b.toolTip = tab.displayName
             stack.addArrangedSubview(b)
+            // .fillEqually equalises WIDTH only; an NSButton keeps its intrinsic
+            // height, which turns the tiles into pills. Pin height to the row so
+            // they stay square.
+            b.heightAnchor.constraint(equalTo: stack.heightAnchor).isActive = true
         }
-        // Keep the grid to four columns even when the chunk is short, so a row
-        // of two essentials does not stretch into two huge tiles.
-        for _ in ids.count..<4 {
+        // Zen uses grid auto-fit with a 48px minimum, so the column count
+        // REFLOWS as the sidebar narrows rather than squashing four tiles into
+        // pills. Fillers keep a short final row left-aligned.
+        // Pad the final short row so tiles stay their natural size rather than
+        // stretching to fill.
+        let columns = max(ids.count, 4)
+        for _ in ids.count..<columns {
             let filler = NSView()
             filler.translatesAutoresizingMaskIntoConstraints = false
             stack.addArrangedSubview(filler)

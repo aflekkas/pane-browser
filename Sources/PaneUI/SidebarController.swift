@@ -98,7 +98,7 @@ public final class SidebarController: NSViewController {
         view.addSubview(header)
 
         // spec §5 — "+ New Tab" as the last row of the list, per the Arc
-        // reference in docs/reference/arc-sidebar.md.
+        // reference in docs/arc-sidebar.md.
         newTabButton.translatesAutoresizingMaskIntoConstraints = false
         newTabButton.isBordered = false
         newTabButton.image = NSImage(systemSymbolName: "plus", accessibilityDescription: nil)
@@ -115,7 +115,7 @@ public final class SidebarController: NSViewController {
         spaceBar.translatesAutoresizingMaskIntoConstraints = false
         spaceBar.orientation = .horizontal
         spaceBar.distribution = .fillEqually
-        spaceBar.spacing = 2
+        spaceBar.spacing = 3          // Zen workspace strip gap
         view.addSubview(spaceBar)
 
         let hairline = NSBox()
@@ -157,7 +157,7 @@ public final class SidebarController: NSViewController {
             spaceBar.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 8),
             spaceBar.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -8),
             spaceBar.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -10),
-            spaceBar.heightAnchor.constraint(equalToConstant: 26),
+            spaceBar.heightAnchor.constraint(equalToConstant: 28),  // Zen workspace strip
         ])
     }
 
@@ -182,7 +182,7 @@ public final class SidebarController: NSViewController {
             }
             b.isBordered = false
             b.wantsLayer = true
-            b.layer?.cornerRadius = 7
+            b.layer?.cornerRadius = 10
             b.layer?.backgroundColor = isCurrent
                 ? NSColor.controlAccentColor.withAlphaComponent(0.20).cgColor
                 : NSColor.clear.cgColor
@@ -307,8 +307,15 @@ public final class SidebarController: NSViewController {
         var next: [Row] = []
         let essentials = model.section(.essential)
         if !essentials.isEmpty {
-            for chunk in stride(from: 0, to: essentials.count, by: 4) {
-                next.append(.essentialsRow(Array(essentials[chunk..<min(chunk + 4, essentials.count)]).map(\.id)))
+            // Zen: grid auto-fit, minmax(max(23.7%, 48px), 1fr). The column
+            // count reflows with sidebar width instead of squashing a fixed
+            // four into pills (docs/zen-metrics.md).
+            let inner = max(120, (outline.bounds.width > 1 ? outline.bounds.width
+                                                          : scroll.bounds.width) - 20)
+            let columns = max(2, min(5, Int(inner / 52)))
+            for chunk in stride(from: 0, to: essentials.count, by: columns) {
+                let slice = essentials[chunk..<min(chunk + columns, essentials.count)]
+                next.append(.essentialsRow(slice.map(\.id)))
             }
         }
         let pinned = model.section(.pinned)
@@ -413,7 +420,13 @@ extension SidebarController: NSOutlineViewDelegate {
         guard let row = item as? Int, row < rows.count else { return 28 }
         switch rows[row] {
         case .spacer:        return 14
-        case .essentialsRow: return 56
+        // Square tiles: four across the sidebar's inner width, so the row must
+        // be as tall as a tile is wide. A fixed height turns them into pills as
+        // the sidebar resizes.
+        case .essentialsRow:
+            // Zen: essentials tiles are --tab-min-height 44px. Fixed height,
+            // with the COLUMN COUNT reflowing instead — see zen-metrics.md.
+            return 44 + 8
         case .tab:           return 28
         }
     }
@@ -433,8 +446,14 @@ extension SidebarController: NSOutlineViewDelegate {
             return EssentialsRowView(ids: ids, model: model) { [weak self] in self?.onSelect?($0) }
         case .tab(let id):
             guard let tab = model[id] else { return nil }
-            return TabRowView(tab: tab)
+            return TabRowView(tab: tab) { [weak self] in self?.onClose?(id) }
         }
+    }
+
+    /// Use the pill row so selection is a rounded inset highlight rather than
+    /// AppKit's full-bleed default.
+    public func outlineView(_ v: NSOutlineView, rowViewForItem item: Any) -> NSTableRowView? {
+        PillRowView()
     }
 
     public func outlineViewSelectionDidChange(_ n: Notification) {

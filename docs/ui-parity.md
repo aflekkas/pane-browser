@@ -30,19 +30,23 @@ it merely compiles.
 - [x] Spaces pinned to the bottom
 - [x] `+ New Tab` as the last row of the list
 - [x] Sections separated by spacing, no headers
-- [x] Row pitch ~27–28 pt (measured off the reference)
+- [x] Row pitch 28 pt — confirmed against Zen's `--tab-min-height`
+- [x] Corner radius 10 pt — Zen's `--border-radius-medium`
+- [x] Essentials tiles 44 pt tall, reflowing column count (Zen grid auto-fit)
+- [x] Spaces strip 28 pt tall, 3 pt gap — Zen's workspace strip
 - [ ] Traffic-light clearance and header spacing matched precisely
-- [ ] Sidebar resizable by dragging the divider
+- [x] Sidebar resizable by dragging the divider
 - [ ] Sidebar auto-hide / hover-reveal
 
 ### Tabs
 - [x] Essentials as an icon grid
 - [x] Favicons on rows
-- [ ] Favicons on essentials tiles at the right size
-- [ ] Hover state on rows
-- [ ] Close button appearing on hover
+- [x] Favicons on essentials tiles at the right size
+- [x] Favicons cached to disk so they survive relaunch
+- [x] Hover state on rows
+- [x] Close button appearing on hover
 - [ ] Drag reorder with a live insertion indicator
-- [ ] Selected-row pill styling matched (radius, inset, weight)
+- [x] Selected-row pill styling — rounded inset, not AppKit's full-bleed row
 
 ### Spaces
 - [x] Rename
@@ -59,7 +63,7 @@ it merely compiles.
 
 ## Method
 
-The reference measurements live in `docs/reference/arc-sidebar.md`. When adding
+The reference measurements live in `docs/arc-sidebar.md`. When adding
 to this list, measure off a real screenshot and record the number there first —
 "looks about right" is how a UI drifts a pixel at a time.
 

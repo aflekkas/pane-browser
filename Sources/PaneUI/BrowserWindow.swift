@@ -572,7 +572,7 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
         // Arc/Zen layout: nav controls and the address field live INSIDE the
         // sidebar, so the content area has no chrome above it at all. That is
         // the defining move — more than any spacing value (spec §5, and
-        // docs/reference/arc-sidebar.md).
+        // docs/arc-sidebar.md).
         let header = sidebar.header
 
         let navRow = NSStackView()
@@ -623,9 +623,15 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
         contentBox.layer?.cornerRadius = 8
         contentBox.layer?.masksToBounds = true
 
-        let divider = NSBox()
-        divider.boxType = .separator
+        // Draggable divider. A fixed-width sidebar is the single most obvious
+        // "this is not a real browser" tell (docs/ui-parity.md).
+        let divider = SidebarDivider()
         divider.translatesAutoresizingMaskIntoConstraints = false
+        divider.onDrag = { [weak self] dx in
+            guard let self else { return }
+            let next = self.sidebarWidth.constant + dx
+            self.sidebarWidth.constant = min(360, max(180, next))
+        }
 
         content.addSubview(side); content.addSubview(divider); content.addSubview(contentBox)
 
@@ -654,11 +660,11 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
             divider.leadingAnchor.constraint(equalTo: side.trailingAnchor),
             divider.topAnchor.constraint(equalTo: content.topAnchor),
             divider.bottomAnchor.constraint(equalTo: content.bottomAnchor),
-            divider.widthAnchor.constraint(equalToConstant: 1),
+            divider.widthAnchor.constraint(equalToConstant: 6),
 
             // Content fills everything right of the divider. No toolbar.
             contentBox.topAnchor.constraint(equalTo: content.topAnchor, constant: 8),
-            contentBox.leadingAnchor.constraint(equalTo: divider.trailingAnchor, constant: 8),
+            contentBox.leadingAnchor.constraint(equalTo: divider.trailingAnchor, constant: 4),
             contentBox.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -8),
             contentBox.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -8),
         ])
