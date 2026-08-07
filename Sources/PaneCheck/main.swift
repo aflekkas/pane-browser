@@ -27,4 +27,6 @@ check.suite("URLNormalizer") { e in
     e.that(URLNormalizer.resolve("   ") == nil, "whitespace resolves to nothing")
 }
 
+tabModelChecks(check)
+
 exit(check.run())
