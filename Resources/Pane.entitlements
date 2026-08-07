@@ -2,45 +2,24 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <!-- spec §7 — the vault uses SecAccessControl, which forces the
-       data-protection keychain, which requires this entitlement. Without it
-       SecItemAdd returns errSecMissingEntitlement (-34018).
+  <!-- DEVELOPMENT: deliberately EMPTY.
 
-       Ad-hoc signing accepts the group only when it matches the bundle ID;
-       a real team-prefixed group ($(AppIdentifierPrefix)com.aflekkas.pane)
-       needs a provisioning profile and a paid account. -->
-  <key>keychain-access-groups</key>
-  <array>
-    <string>com.aflekkas.pane</string>
-  </array>
+       Measured on macOS 26.5.2, isolated one entitlement at a time:
 
-  <!-- spec §7 passkeys. THE key fact (ADR 0003): with this entitlement WebKit's
-       own WebAuthn implementation handles navigator.credentials inside
-       WKWebView and talks to AuthenticationServices directly. Pane writes NO
-       WebAuthn code — no CBOR, no clientDataJSON, no attestation parsing.
+         no entitlements               -> app LAUNCHES
+         keychain-access-groups        -> launchd REFUSES to spawn it
+                                          (RBSRequestErrorDomain 5, POSIX 163)
 
-       Requesting it is a business step, not an engineering one: macOS 13.3+,
-       Apple-reviewed, and Apple's own text requires the Account Holder role on
-       an ORGANIZATION developer account (which needs a D-U-N-S number), via
-       https://developer.apple.com/contact/request/macos-browsers-passkeys/
+       Ad-hoc signing (`codesign --sign -`) cannot satisfy an entitlement that
+       needs a team identifier, and rather than being ignored the entitlement
+       makes the app un-launchable. So a dev build must carry NONE.
 
-       Apple's review criteria also require the app to ALREADY behave as a
-       browser — http+https schemes declared, a URL field or search on launch.
-       That is why passkeys are last in the build order rather than early:
-       the ordering is forced by the review, not by preference.
+       The consequence is already designed for: CredentialVault probes what the
+       keychain actually honours and runs `deviceUnlockedOnly`, saying so at the
+       moment the user is asked to save a password (ADR 0007). The vault works;
+       it just is not Touch ID gated until there is a real signing identity.
 
-       Declared here so the plumbing is in place. Without the grant, WebKit
-       restricts passkeys to relying parties covered by associated-domains
-       below, which is how this gets verified before any approval arrives. -->
-  <key>com.apple.developer.web-browser.public-key-credential</key>
-  <true/>
-
-  <!-- Verification path pre-grant: a domain we control. The same code then
-       widens to every site once the entitlement lands — nothing is stubbed and
-       nothing waits. Replace with a real domain when one exists. -->
-  <key>com.apple.developer.associated-domains</key>
-  <array>
-    <string>webcredentials:pane.invalid</string>
-  </array>
+       The full set is in Pane-release.entitlements. Build with
+       PANE_RELEASE=1 ./Scripts/bundle.sh once you have an identity. -->
 </dict>
 </plist>

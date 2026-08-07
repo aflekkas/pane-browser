@@ -60,3 +60,30 @@ unbuildable until a business relationship exists, which is the same trap ADR
   save/list/delete round trip. They do **not** cover reading a secret, because
   a read prompts for user presence and cannot run unattended — stated here so
   the coverage is not mistaken for more than it is.
+
+## Addendum 2026-08-07: the entitlement also prevents launching
+
+Worse than "the entitlement does not help": **it actively breaks the app.**
+
+Isolated one at a time on macOS 26.5.2, ad-hoc signed:
+
+| Entitlements | Result |
+| --- | --- |
+| none | app **launches** |
+| `keychain-access-groups` | **launchd refuses to spawn it** — `RBSRequestErrorDomain 5`, POSIX 163 |
+| `+ com.apple.developer.web-browser.public-key-credential` | same failure |
+
+Ad-hoc signing cannot satisfy an entitlement requiring a team identifier, and
+rather than being ignored the entitlement makes the binary un-launchable.
+
+So a development build must carry **no entitlements at all**. Not "the ones
+that work" — none.
+
+This strengthens the case for this ADR rather than weakening it. Option 1
+(require a Developer ID before the vault works) would have meant the app could
+not even start on a machine without one. The probe-and-declare design means it
+runs, stores credentials, and tells the user exactly what protection they are
+getting.
+
+`Scripts/bundle.sh` uses `Resources/Pane.entitlements` (empty) by default and
+`Resources/Pane-release.entitlements` (the full set) under `PANE_RELEASE=1`.

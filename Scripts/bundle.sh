@@ -62,7 +62,10 @@ PLIST
 
 # Ad-hoc sign. Restricted entitlements (passkeys) need a real provisioning
 # profile and an organization account — milestone F, ADR 0004.
+# Release entitlements need a real signing identity; ad-hoc signing with a
+# RESTRICTED entitlement makes launchd refuse to spawn the app at all.
 ENT="Resources/Pane.entitlements"
+[ "${PANE_RELEASE:-0}" = "1" ] && ENT="Resources/Pane-release.entitlements"
 if [ -f "$ENT" ]; then
   codesign --force --sign - --timestamp=none --entitlements "$ENT" "$APP" 2>/dev/null \
     || echo "warning: signing with entitlements failed; the keychain vault will not work"

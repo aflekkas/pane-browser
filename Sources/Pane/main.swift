@@ -8,6 +8,12 @@ import PaneHarness
 // library target so it can be tested (ADR 0006).
 let args = CommandLine.arguments
 
+// Glass cannot be captured offscreen — it has no backdrop to sample — so
+// goldens force the flat path. See GlassLayer.forceDisabled.
+if args.contains("--no-glass") || args.contains("--golden-scene") {
+    GlassLayer.forceDisabled = true
+}
+
 // Arm mutants BEFORE any mode branch. Parsing this inside --selftest meant
 // --verify-download silently ignored it, and the quarantine mutant "escaped"
 // while actually never being planted — the same false green the canary caught

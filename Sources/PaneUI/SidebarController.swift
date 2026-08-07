@@ -41,7 +41,10 @@ public final class SidebarController: NSViewController {
     public var onTabCommand: ((Command) -> Void)?
 
     private let outline = NSOutlineView()
+    private var glassContainer: NSView?
     public var outlineViewForBench: NSOutlineView { outline }
+    /// For the milestone G gate, which must know which path actually ran.
+    public var glassState: String { GlassLayer.describeState }
     private let spaceBar = NSStackView()
     /// Filled by the window controller with nav buttons and the address field.
     /// Arc and Zen both put the URL bar *inside* the sidebar, which is what
@@ -76,6 +79,25 @@ public final class SidebarController: NSViewController {
 
     public override func loadView() {
         view = NSView()
+
+        // spec §5 — ONE glass container wrapping the entire sidebar, never one
+        // per row: nested glass views each get their own sampling pass, and a
+        // container merges them into one. Returns nil when glass is
+        // unavailable or the user asked for reduced transparency, in which case
+        // the flat NSBox below is the whole appearance.
+        let glass = GlassLayer.makeContainer(spacing: 12)
+        if let glass {
+            glass.translatesAutoresizingMaskIntoConstraints = false
+            view.addSubview(glass)
+            NSLayoutConstraint.activate([
+                glass.topAnchor.constraint(equalTo: view.topAnchor),
+                glass.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+                glass.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+                glass.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            ])
+        }
+        self.glassContainer = glass
+
         // Flat fill via an NSBox rather than `wantsLayer` + a layer background:
         // the golden capture re-draws the hierarchy with displayIgnoringOpacity,
         // which renders draw(_:) but not bare layer properties — a layer-only
@@ -85,7 +107,11 @@ public final class SidebarController: NSViewController {
         let backing = NSBox()
         backing.boxType = .custom
         backing.borderWidth = 0
-        backing.fillColor = .controlBackgroundColor
+        // Behind glass the fill must be nearly transparent or it defeats the
+        // effect entirely; without glass it IS the sidebar's background.
+        backing.fillColor = glass == nil
+            ? .controlBackgroundColor
+            : NSColor.controlBackgroundColor.withAlphaComponent(0.12)
         backing.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(backing)
         NSLayoutConstraint.activate([
