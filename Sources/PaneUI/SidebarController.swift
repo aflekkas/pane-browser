@@ -37,6 +37,7 @@ public final class SidebarController: NSViewController {
     public var onSelect: ((TabID) -> Void)?
     public var onClose: ((TabID) -> Void)?
     public var onReorder: ((TabID, Int, TabKind) -> Void)?
+    public var onTabCommand: ((Command) -> Void)?
 
     private let outline = NSOutlineView()
     private let spaceBar = NSStackView()
@@ -101,6 +102,8 @@ public final class SidebarController: NSViewController {
         outline.usesAutomaticRowHeights = false
         outline.target = self
         outline.doubleAction = #selector(noop)
+        outline.menu = NSMenu()
+        outline.menu?.delegate = self
 
         let col = NSTableColumn(identifier: .init("main"))
         col.resizingMask = .autoresizingMask
@@ -469,6 +472,42 @@ extension SidebarController: NSOutlineViewDataSource {
             }
         }
         return (kind, offset)
+    }
+}
+
+// MARK: - Tab context menu (spec §4, §5)
+
+extension SidebarController: NSMenuDelegate {
+    public func menuNeedsUpdate(_ menu: NSMenu) {
+        menu.removeAllItems()
+        // clickedRow, not selectedRow: right-clicking a row must act on THAT
+        // row, not on whatever happened to be selected.
+        guard let id = tabID(atRow: outline.clickedRow), let tab = model[id] else { return }
+
+        func add(_ title: String, _ command: Command, state: NSControl.StateValue = .off) {
+            let mi = NSMenuItem(title: title, action: #selector(runTabCommand(_:)), keyEquivalent: "")
+            mi.target = self
+            mi.representedObject = command
+            mi.state = state
+            menu.addItem(mi)
+        }
+
+        for (title, kind) in [("Essential", TabKind.essential),
+                              ("Pinned", .pinned),
+                              ("Today", .ephemeral)] {
+            add(title, .setTabKind(id, kind), state: tab.kind == kind ? .on : .off)
+        }
+        menu.addItem(.separator())
+        add("Copy Link", .copyTabURL(id))
+        add("Duplicate", .duplicateTab(id))
+        menu.addItem(.separator())
+        add("Close Tab", .closeTab(id))
+        add("Close Other Tabs", .closeOtherTabs(id))
+    }
+
+    @objc private func runTabCommand(_ sender: NSMenuItem) {
+        guard let c = sender.representedObject as? Command else { return }
+        onTabCommand?(c)
     }
 }
 

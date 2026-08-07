@@ -157,3 +157,50 @@ public func tabModelChecks(_ check: Check) {
         e.equal(Tab().displayName, "New Tab", "no title and no url falls back to New Tab")
     }
 }
+
+/// spec §4 — promoting and demoting between kinds, which the sidebar context
+/// menu drives. Kept separate so a regression names the behaviour.
+public func tabKindChecks(_ check: Check) {
+    let url = URL(string: "https://mail.example.com")!
+    let wandered = URL(string: "https://mail.example.com/thread/9931")!
+
+    check.suite("Promote to essential pins the home URL") { e in
+        var m = TabModel()
+        let a = m.open(Tab(kind: .ephemeral, url: wandered))
+        m.update(a) { $0.homeURL = $0.url }
+        m.move(a, toIndex: Int.max, in: .essential)
+        e.equal(m[a]?.kind, .essential, "kind changed")
+        e.equal(m[a]?.restoreURL, wandered, "restores to where it was pinned")
+        e.equal(m.section(.ephemeral).count, 0, "and left Today")
+    }
+
+    check.suite("Demote from essential clears the home URL") { e in
+        var m = TabModel()
+        let a = m.open(Tab(kind: .essential, url: wandered, homeURL: url))
+        m.update(a) { $0.homeURL = nil }
+        m.move(a, toIndex: Int.max, in: .ephemeral)
+        e.equal(m[a]?.kind, .ephemeral, "kind changed")
+        e.equal(m[a]?.restoreURL, wandered,
+                "a demoted tab restores where it actually is, not its old home")
+    }
+
+    check.suite("Close Other Tabs spares explicitly pinned tabs") { e in
+        var m = TabModel()
+        let keep = m.open(Tab(kind: .ephemeral, url: url))
+        let nailed = m.open(Tab(kind: .pinned, url: url, userPinnedExplicitly: true), select: false)
+        let other = m.open(Tab(kind: .ephemeral, url: url), select: false)
+        for t in m.tabs where t.id != keep && !t.userPinnedExplicitly { m.close(t.id) }
+        e.that(m[keep] != nil, "the kept tab survives")
+        e.that(m[nailed] != nil, "an explicitly pinned tab is not swept away")
+        e.that(m[other] == nil, "an ordinary tab is closed")
+    }
+
+    check.suite("Moving to the end of a section is idempotent-ish") { e in
+        var m = TabModel()
+        let a = m.open(Tab(kind: .pinned, title: "a"))
+        _ = m.open(Tab(kind: .pinned, title: "b"))
+        m.move(a, toIndex: Int.max, in: .pinned)
+        e.equal(m.section(.pinned).map { $0.title ?? "" }, ["b", "a"],
+                "Int.max clamps to the end rather than trapping")
+    }
+}

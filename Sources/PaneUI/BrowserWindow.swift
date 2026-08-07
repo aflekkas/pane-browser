@@ -90,6 +90,7 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
         buildChrome()
         sidebar.onSelect   = { [weak self] in self?.dispatch(.selectTab($0)) }
         sidebar.onClose    = { [weak self] in self?.dispatch(.closeTab($0)) }
+        sidebar.onTabCommand = { [weak self] c in self?.dispatch(c) }
         sidebar.onReorder  = { [weak self] id, i, kind in self?.reorder(id, i, kind) }
 
         bootstrapSpaces()
@@ -207,6 +208,40 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
             let target = n >= 9 ? all.count - 1 : min(n - 1, all.count - 1)
             guard target >= 0 else { return }
             model.select(all[target].id, at: Date())
+            showSelected()
+
+        case .setTabKind(let id, let kind):
+            guard let tab = model[id], tab.kind != kind else { return }
+            // spec §4 — an essential remembers where it "lives" and restores
+            // there rather than wherever it wandered to.
+            if kind == .essential {
+                model.update(id) { $0.homeURL = $0.url }
+            } else {
+                model.update(id) { $0.homeURL = nil }
+            }
+            // Explicitly pinning is the user nailing it down — one of §4's
+            // four never-discard conditions.
+            model.update(id) { $0.userPinnedExplicitly = (kind != .ephemeral) }
+            model.move(id, toIndex: Int.max, in: kind)
+
+        case .copyTabURL(let id):
+            guard let url = model[id]?.url else { return }
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(url.absoluteString, forType: .string)
+
+        case .duplicateTab(let id):
+            guard let tab = model[id] else { return }
+            let new = model.open(Tab(kind: tab.kind, url: tab.url, title: tab.title,
+                                     lastActiveAt: Date()))
+            _ = engine(for: new)
+            showSelected()
+
+        case .closeOtherTabs(let keep):
+            for t in model.tabs where t.id != keep && !t.userPinnedExplicitly {
+                teardown(t.id)
+                model.close(t.id)
+            }
+            model.select(keep, at: Date())
             showSelected()
 
         case .deleteSpace(let id):

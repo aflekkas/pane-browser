@@ -31,6 +31,11 @@ public enum Command: Equatable, Sendable {
     case previousSpace
     /// 1-based; ⌘1…⌘9 select the nth tab, ⌘9 the last, as every browser does.
     case selectTabIndex(Int)
+    /// spec §4 — move a tab between essentials / pinned / today.
+    case setTabKind(TabID, TabKind)
+    case copyTabURL(TabID)
+    case duplicateTab(TabID)
+    case closeOtherTabs(TabID)
     /// spec §4 — force the discard sweep now rather than waiting for the timer.
     /// Exists so the benchmark and scenarios can exercise discard deterministically.
     case sweepDiscardable
