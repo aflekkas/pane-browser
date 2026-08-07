@@ -62,7 +62,12 @@ PLIST
 
 # Ad-hoc sign. Restricted entitlements (passkeys) need a real provisioning
 # profile and an organization account — milestone F, ADR 0004.
-codesign --force --sign - --timestamp=none "$APP" 2>/dev/null \
-  || echo "warning: ad-hoc signing failed; the app will still run locally"
+ENT="Resources/Pane.entitlements"
+if [ -f "$ENT" ]; then
+  codesign --force --sign - --timestamp=none --entitlements "$ENT" "$APP" 2>/dev/null \
+    || echo "warning: signing with entitlements failed; the keychain vault will not work"
+else
+  codesign --force --sign - --timestamp=none "$APP" 2>/dev/null || true
+fi
 
 echo "built $APP"

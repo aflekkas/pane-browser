@@ -31,5 +31,6 @@ tabModelChecks(check)
 await storeChecks(check)
 spaceChecks(check)
 tabKindChecks(check)
+vaultChecks(check)
 
 exit(check.run())
