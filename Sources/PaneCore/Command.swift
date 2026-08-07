@@ -15,4 +15,13 @@ public enum Command: Equatable, Sendable {
     case reload
     case stopLoading
     case focusAddressBar
+
+    case newTab(kind: TabKind)
+    case closeTab(TabID?)      // nil = the selected tab
+    case selectTab(TabID)
+    case reopenClosedTab
+    case toggleSidebar
+    /// spec §4 — force the discard sweep now rather than waiting for the timer.
+    /// Exists so the benchmark and scenarios can exercise discard deterministically.
+    case sweepDiscardable
 }

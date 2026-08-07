@@ -15,9 +15,9 @@ complete; it will catch you.
 
 ## Status
 
-**Current phase:** A — it browses
+**Current phase:** B — it has tabs
 **App launchable:** yes — `./Scripts/run.sh`
-**Last verified gate:** milestone A — restore p50 **82 ms** / 200 ms, scroll restored (2026-08-07)
+**Last verified gate:** milestone A′ — FairPlay GO (2026-08-07). Milestone B partially verified, see below.
 
 ---
 
@@ -102,15 +102,36 @@ permits us.
 
 Tab model, lifecycle state machine, sidebar with flat colours and real drag/drop.
 
-- [ ] Tab model + two-tier lifecycle state machine in `PaneCore`, headless
-- [ ] `NSOutlineView` sidebar — conventional data source, **not** diffable
-- [ ] Drag and drop, `NSPasteboard` custom UTI + `public.url` fallback
-- [ ] ⌘T / ⌘W / switch / reopen-closed via `CommandBus`
+- [x] Tab model + two-tier lifecycle state machine in `PaneCore`, headless — 49 assertions
+- [x] `NSOutlineView` sidebar — conventional data source, **not** diffable
+- [x] Drag and drop, `NSPasteboard` custom UTI + `public.url` fallback — *not yet exercised by a test*
+- [x] ⌘T / ⌘W / ⇧⌘T / ⌃⌘S via the command bus
 
 **Gate:** every transition in the (corrected, two-tier) §4 model covered by
 headless tests against the fake engine protocol, including all four
 never-discard conditions. 200 sidebar rows scroll without dropped frames. Drag
 reorder survives relaunch. Visual golden reviewed by actually looking at it.
+
+**RESULT 2026-08-07: PARTIAL — do not mark this phase complete.**
+
+Passing:
+- Lifecycle model: 49 assertions, 16 suites, all four never-discard conditions
+  covered one suite each, plus a fifth (the selected tab never discards).
+  Verified non-vacuous by planting a mutant that drops the audio guard — the
+  suite fails and names the audio condition specifically.
+- Sidebar renders correctly: three sections, essentials as a 4-per-row icon
+  grid, pinned and today as lists, spacing not headers, selection highlighted.
+  **Verified by looking at a screenshot, manually.**
+- Chrome sync bug found and fixed: switching tabs left the title bar and address
+  bar showing the previous tab's page. See `docs/api-notes/appkit.md`.
+
+**Not yet done — this is what blocks the phase:**
+- [ ] Visual golden automation. In-app capture cannot photograph the sidebar at
+      all (`NSScrollView` is layer-backed; `cacheDisplay` skips it). Five
+      approaches tried and recorded in `docs/api-notes/appkit.md`. Until this
+      works, `gate.sh` must keep listing visual goldens under "NOT proven".
+- [ ] 200-row scroll performance measurement
+- [ ] Drag reorder survives relaunch — needs session persistence (milestone C)
 
 > Correction folded in: `NSOutlineViewDiffableDataSource` does not exist.
 > See `docs/research/2026-08-07-architecture.md`.

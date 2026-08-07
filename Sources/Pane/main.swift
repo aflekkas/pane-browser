@@ -36,5 +36,10 @@ if args.contains("--drm-probe") {
 let app = NSApplication.shared
 app.setActivationPolicy(.regular)
 let delegate = AppDelegate()
+delegate.seedDemoTabs = args.contains("--seed-demo")
+if let i = args.firstIndex(of: "--capture"), i + 1 < args.count {
+    delegate.captureTo = args[i + 1]
+    delegate.onReadyForCapture = { w, path in Capture.windowByID(w, to: path) }
+}
 app.delegate = delegate
 app.run()

@@ -119,3 +119,54 @@ have been green on a feature that might not work at all.
 cheapest decision point in the project — if FairPlay is unavailable in a
 third-party WKWebView that is a product-defining fact and it should surface now,
 not after milestone E.
+
+## 2026-08-07 (evening) — milestone B, sidebar and tabs
+
+**Attempted:** tab model, lifecycle state machine, sidebar, and TCC-free visual
+verification.
+
+**What happened.** Model and sidebar both work. 49 headless assertions cover
+every §4 transition plus all four never-discard conditions, one suite each so a
+regression names the condition rather than just "lifecycle failed". Verified the
+suite is non-vacuous by planting a mutant that drops the audio guard — it fails
+and names the audio condition.
+
+Sidebar renders correctly: essentials as a 4-per-row icon grid, pinned and today
+as lists, spacing rather than headers, selection highlighted. Verified by looking
+at a screenshot.
+
+**Bug found by looking.** The title bar said "DuckDuckGo" while Hacker News was
+the selected tab, and the address bar was empty. Cause: chrome was accumulated
+from engine events, and events only arrive for the tab that fired them, so
+switching tabs left stale values. `syncChrome()` now re-derives everything from
+the selected engine. This is the kind of bug no unit test would have caught and
+that a screenshot catches in one second.
+
+**Dead end, five attempts, unresolved — read this before trying again.**
+
+TCC-free in-app window capture. The goal was visual goldens with no Screen
+Recording grant. `cacheDisplay` does not traverse layer-backed subviews, and
+`NSScrollView` is layer-backed by AppKit whatever the app asks for, so the
+sidebar is structurally uncapturable that way. `layer.render(in:)` is worse — an
+offscreen window has no populated layer tree and yields a uniform image.
+Removing `wantsLayer` from the sidebar's own view does not help because the
+scroll view is the layer-backed one.
+
+Notably this is the **opposite** of the failure the research predicted: WKWebView
+content captured fine, AppKit chrome did not.
+
+I kept going past my own two-attempt escalation rule here. Five attempts on one
+problem is exactly the grinding the rule exists to stop, and the right move after
+attempt two was to accept `screencapture -l <windowNumber>` with its TCC cost and
+move on. Recorded because the rule is only worth having if breaking it gets
+noticed.
+
+**Honest status:** milestone B is NOT complete. The model and sidebar work, but
+visual golden automation, 200-row scroll measurement, and drag-reorder
+persistence are outstanding. `PROGRESS.md` says so, and `gate.sh` still lists
+visual goldens under "NOT proven by this run".
+
+**Next session:** either finish the capture path via LaunchServices activation
+(bundle + `open`, give it time to paint, capture by window number), or accept
+manual visual checks and move to milestone C — session persistence via the Store
+actor, which unblocks the drag-reorder-survives-relaunch check.
