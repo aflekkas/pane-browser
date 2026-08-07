@@ -63,6 +63,13 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
     /// page, not a bad browser, and reloading into it forever is the failure
     /// mode the spec names.
     private var crashes: [String: [Date]] = [:]
+    private let vault = CredentialVault()
+    /// Origins the user said "never" for. Session-scoped, like cert exceptions:
+    /// a permanent "never" hidden in a database is hard to discover and undo.
+    private var neverSave: Set<String> = []
+    /// What we last filled, so a submit carrying the same values is not offered
+    /// for saving again.
+    private var lastFilled: [String: String] = [:]
     private var saveTimer: Timer?
     private let store: Store?
     /// Where the session lives. Under Application Support so it survives, and
@@ -464,6 +471,10 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
             self.sidebar.spaces = self.spaceModel
             self.scheduleSave()
         }
+        e.onLoginForm = { [weak self] info in
+            guard let self else { return }
+            Task { @MainActor in await self.handleLoginForm(info, tab: id) }
+        }
         e.authHandler = { [weak self] challenge in
             await AuthChallengeHandler.respond(to: challenge, window: self?.window)
         }
@@ -577,6 +588,47 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
     /// left the title bar and address bar showing the *previous* tab's page —
     /// visible in the first sidebar screenshot as "DuckDuckGo" in the title
     /// while Hacker News was selected.
+    /// spec §7 — offer to fill on detection, offer to save on submit.
+    private func handleLoginForm(_ info: LoginFormInfo, tab id: TabID) async {
+        guard let engine = engines[id],
+              let url = engine.currentURL,
+              // https-only, enforced at the boundary rather than trusted from
+              // the page's own reported origin.
+              let origin = CredentialVault.originKey(for: url) else { return }
+        let profile = spaceModel.currentSpace?.profileID ?? "default"
+
+        switch info.kind {
+        case .detected:
+            let matches = vault.credentials(origin: origin, profileID: profile)
+            guard !matches.isEmpty else { return }
+            guard let chosen = CredentialPrompt.chooseCredential(matches, origin: origin)
+            else { return }
+            // Touch ID happens HERE, on the read — not on save, and not on
+            // listing usernames.
+            guard let secret = try? vault.password(
+                origin: origin, username: chosen.username, profileID: profile,
+                reason: "Fill your password for \(origin)") else { return }
+            _ = await engine.fillCredentials(username: chosen.username, password: secret)
+            lastFilled[origin] = chosen.username
+
+        case .submitted:
+            guard !neverSave.contains(origin), !info.usernameValue.isEmpty else { return }
+            // Do not offer to save what we just filled.
+            if lastFilled[origin] == info.usernameValue { return }
+            let existing = vault.credentials(origin: origin, profileID: profile)
+            let isUpdate = existing.contains { $0.username == info.usernameValue }
+            // The password never leaves the page world into Swift except here,
+            // and only after the user agrees.
+            guard CredentialPrompt.offerToSave(origin: origin,
+                                               username: info.usernameValue,
+                                               isUpdate: isUpdate, window: window)
+            else { return }
+            guard let secret: String = await engine.readPasswordFieldForSaving() else { return }
+            try? vault.save(origin: origin, username: info.usernameValue,
+                            password: secret, profileID: profile)
+        }
+    }
+
     /// spec §6 — never silently reload; that is how an infinite crash loop on
     /// a bad page happens. Count per origin and escalate the offer.
     private func handleRendererCrash(for id: TabID) {

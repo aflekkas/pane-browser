@@ -114,6 +114,17 @@ public final class WKWebEngine: NSObject, WebEngine {
         return (readBack as? String) == password
     }
 
+    /// spec §7 — reads the password field, ONLY when the user has agreed to
+    /// save. Deliberately a separate call from detection: a secret should cross
+    /// into Swift at the moment of consent, not speculatively on every page
+    /// that happens to have a password field.
+    public func readPasswordFieldForSaving() async -> String? {
+        let v: Any? = try? await webView.evaluateJavaScript(
+            "document.querySelector('input[type=password]')?.value ?? ''")
+        guard let s = v as? String, !s.isEmpty else { return nil }
+        return s
+    }
+
     /// spec §4 — the blob the entire discard/restore claim rests on.
     public func captureInteractionState() -> Data? {
         webView.interactionState as? Data
