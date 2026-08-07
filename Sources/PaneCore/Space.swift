@@ -31,14 +31,22 @@ public struct Space: Identifiable, Sendable, Equatable {
     public let id: String
     public var name: String
     public var icon: String?
+    /// An index into a small fixed palette, not a free colour. Spaces need to
+    /// be *distinguishable*; a colour picker would be theming, which is out of
+    /// scope (docs/ui-parity.md).
+    public var accent: Int?
     public var profileID: String
     public var sortIndex: Int
 
     public init(id: String = UUID().uuidString, name: String, icon: String? = nil,
-                profileID: String, sortIndex: Int = 0) {
-        self.id = id; self.name = name; self.icon = icon
+                accent: Int? = nil, profileID: String, sortIndex: Int = 0) {
+        self.id = id; self.name = name; self.icon = icon; self.accent = accent
         self.profileID = profileID; self.sortIndex = sortIndex
     }
+
+    /// Fixed palette. Index, not a colour value, so it survives a light/dark
+    /// switch and cannot drift into arbitrary theming.
+    public static let accentCount = 6
 }
 
 /// Spaces and profiles, and the rules about which may be torn down.
@@ -85,6 +93,11 @@ public struct SpaceModel: Sendable {
            spaces.filter({ $0.profileID == pid }).count == 1 {
             profiles[pid]?.name = trimmed
         }
+    }
+
+    public mutating func setAccent(_ id: String, to index: Int?) {
+        guard let i = spaces.firstIndex(where: { $0.id == id }) else { return }
+        spaces[i].accent = index.map { max(0, min(Space.accentCount - 1, $0)) }
     }
 
     public mutating func setIcon(_ id: String, to symbol: String?) {

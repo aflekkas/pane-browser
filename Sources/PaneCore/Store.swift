@@ -253,12 +253,15 @@ public actor Store {
             }
             for sp in spaces {
                 var st: OpaquePointer?
-                guard sqlite3_prepare_v2(db, "INSERT INTO space(id,name,icon,color,profile_id,sort_index) VALUES(?,?,?,NULL,?,?)",
+                guard sqlite3_prepare_v2(db, "INSERT INTO space(id,name,icon,color,profile_id,sort_index) VALUES(?,?,?,?,?,?)",
                                          -1, &st, nil) == SQLITE_OK else { throw err() }
                 defer { sqlite3_finalize(st) }
                 bindText(st, 1, sp.id); bindText(st, 2, sp.name); bindText(st, 3, sp.icon)
-                bindText(st, 4, sp.profileID)
-                sqlite3_bind_int(st, 5, Int32(sp.sortIndex))
+                // §2's `color` column carries the accent INDEX, not a colour
+                // value, so it survives a light/dark switch.
+                bindText(st, 4, sp.accent.map(String.init))
+                bindText(st, 5, sp.profileID)
+                sqlite3_bind_int(st, 6, Int32(sp.sortIndex))
                 guard sqlite3_step(st) == SQLITE_DONE else { throw err() }
             }
             try exec("COMMIT")
@@ -280,10 +283,12 @@ public actor Store {
 
         var spaces: [Space] = []
         var st2: OpaquePointer?
-        if sqlite3_prepare_v2(db, "SELECT id,name,icon,profile_id,sort_index FROM space ORDER BY sort_index", -1, &st2, nil) == SQLITE_OK {
+        if sqlite3_prepare_v2(db, "SELECT id,name,icon,profile_id,sort_index,color FROM space ORDER BY sort_index", -1, &st2, nil) == SQLITE_OK {
             while sqlite3_step(st2) == SQLITE_ROW {
                 guard let id = text(st2, 0), let name = text(st2, 1), let pid = text(st2, 3) else { continue }
-                spaces.append(Space(id: id, name: name, icon: text(st2, 2), profileID: pid,
+                spaces.append(Space(id: id, name: name, icon: text(st2, 2),
+                                    accent: text(st2, 5).flatMap(Int.init),
+                                    profileID: pid,
                                     sortIndex: Int(sqlite3_column_int(st2, 4))))
             }
         }

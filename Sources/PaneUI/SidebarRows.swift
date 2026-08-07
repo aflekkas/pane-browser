@@ -105,12 +105,14 @@ final class TabRowView: NSTableCellView {
 /// as modern (docs/ui-parity.md).
 @MainActor
 final class PillRowView: NSTableRowView {
+    var accent: NSColor = .controlAccentColor
+
     override func drawSelection(in dirtyRect: NSRect) {
         guard selectionHighlightStyle != .none else { return }
         let inset = bounds.insetBy(dx: 6, dy: 1)
         // Zen --border-radius-medium: 10px (docs/zen-metrics.md)
         let path = NSBezierPath(roundedRect: inset, xRadius: 10, yRadius: 10)
-        (isEmphasized ? NSColor.controlAccentColor.withAlphaComponent(0.85)
+        (isEmphasized ? accent.withAlphaComponent(0.85)
                       : NSColor.quaternaryLabelColor.withAlphaComponent(0.6)).setFill()
         path.fill()
     }

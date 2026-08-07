@@ -32,6 +32,7 @@ public final class SidebarController: NSViewController {
     public var onNewSpace: ((String) -> Void)?
     public var onRenameSpace: ((String, String) -> Void)?
     public var onSetSpaceIcon: ((String, String?) -> Void)?
+    public var onSetSpaceAccent: ((String, Int?) -> Void)?
     public var onDeleteSpace: ((String) -> Void)?
     public var onSelect: ((TabID) -> Void)?
     public var onClose: ((TabID) -> Void)?
@@ -45,6 +46,22 @@ public final class SidebarController: NSViewController {
     /// defining move, more than any spacing value.
     public let header = NSView()
     private let newTabButton = NSButton()
+    private let downloadsButton = NSButton()
+    public var onShowDownloads: (() -> Void)?
+
+    /// Shown only while something is downloading or recently finished — a
+    /// permanent chrome affordance for an occasional action is clutter.
+    public func setDownloadState(active: Int, finished: Int) {
+        let visible = active > 0 || finished > 0
+        downloadsButton.isHidden = !visible
+        guard visible else { return }
+        downloadsButton.image = NSImage(
+            systemSymbolName: active > 0 ? "arrow.down.circle.fill" : "arrow.down.circle",
+            accessibilityDescription: "Downloads")
+        downloadsButton.contentTintColor = active > 0 ? .controlAccentColor : .secondaryLabelColor
+        downloadsButton.toolTip = active > 0
+            ? "\(active) downloading" : "\(finished) downloaded"
+    }
     private let scroll = NSScrollView()
     private var rows: [Row] = []
 
@@ -90,6 +107,10 @@ public final class SidebarController: NSViewController {
         outline.addTableColumn(col)
         outline.outlineTableColumn = col
 
+        // draggingDestinationFeedbackStyle .gap draws the live insertion line
+        // AppKit gives you for free; .regular highlights the whole row, which
+        // reads as "drop ONTO this" and is the wrong affordance for a reorder.
+        outline.draggingDestinationFeedbackStyle = .gap
         outline.registerForDraggedTypes([Self.tabUTI, .URL])
         outline.setDraggingSourceOperationMask(.move, forLocal: true)
         outline.setDraggingSourceOperationMask(.copy, forLocal: false)
@@ -110,6 +131,13 @@ public final class SidebarController: NSViewController {
         newTabButton.target = self
         newTabButton.action = #selector(newTabTapped)
         view.addSubview(newTabButton)
+
+        downloadsButton.translatesAutoresizingMaskIntoConstraints = false
+        downloadsButton.isBordered = false
+        downloadsButton.isHidden = true
+        downloadsButton.target = self
+        downloadsButton.action = #selector(downloadsTapped)
+        view.addSubview(downloadsButton)
 
         // Spaces live at the BOTTOM, as in Arc and Zen.
         spaceBar.translatesAutoresizingMaskIntoConstraints = false
@@ -153,6 +181,11 @@ public final class SidebarController: NSViewController {
             hairline.bottomAnchor.constraint(equalTo: spaceBar.topAnchor, constant: -6),
             hairline.heightAnchor.constraint(equalToConstant: 1),
 
+            downloadsButton.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -10),
+            downloadsButton.centerYAnchor.constraint(equalTo: newTabButton.centerYAnchor),
+            downloadsButton.widthAnchor.constraint(equalToConstant: 18),
+            downloadsButton.heightAnchor.constraint(equalToConstant: 18),
+
             // Spaces pinned to the bottom.
             spaceBar.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 8),
             spaceBar.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -8),
@@ -166,6 +199,7 @@ public final class SidebarController: NSViewController {
 
     @objc private func noop() {}
     @objc private func newTabTapped() { onNewTab?() }
+    @objc private func downloadsTapped() { onShowDownloads?() }
 
     /// One pill per space plus a "+". System colours only — no palette, no
     /// theming; the accent colour is whatever the user set in System Settings.
@@ -184,7 +218,7 @@ public final class SidebarController: NSViewController {
             b.wantsLayer = true
             b.layer?.cornerRadius = 10
             b.layer?.backgroundColor = isCurrent
-                ? NSColor.controlAccentColor.withAlphaComponent(0.20).cgColor
+                ? Self.accentColor(sp.accent).withAlphaComponent(0.20).cgColor
                 : NSColor.clear.cgColor
             b.attributedTitle = NSAttributedString(string: sp.name, attributes: [
                 .font: NSFont.systemFont(ofSize: 11, weight: isCurrent ? .semibold : .regular),
@@ -243,6 +277,25 @@ public final class SidebarController: NSViewController {
         iconItem.submenu = iconMenu
         menu.addItem(iconItem)
 
+        let colourItem = NSMenuItem(title: "Colour", action: nil, keyEquivalent: "")
+        let colourMenu = NSMenu()
+        for i in 0..<Space.accentCount {
+            let mi = NSMenuItem(title: ["Blue", "Purple", "Pink", "Orange", "Green", "Teal"][i],
+                                action: #selector(pickAccent(_:)), keyEquivalent: "")
+            mi.target = self
+            mi.representedObject = [id, String(i)]
+            mi.state = (sp.accent == i) ? .on : .off
+            let swatch = NSImage(size: NSSize(width: 12, height: 12), flipped: false) { rect in
+                Self.accentColor(i).setFill()
+                NSBezierPath(roundedRect: rect, xRadius: 3, yRadius: 3).fill()
+                return true
+            }
+            mi.image = swatch
+            colourMenu.addItem(mi)
+        }
+        colourItem.submenu = colourMenu
+        menu.addItem(colourItem)
+
         if spaces.spaces.count > 1 {
             menu.addItem(.separator())
             let del = NSMenuItem(title: "Delete Space", action: #selector(deleteSpace(_:)), keyEquivalent: "")
@@ -262,6 +315,12 @@ public final class SidebarController: NSViewController {
     @objc private func pickIcon(_ sender: NSMenuItem) {
         guard let pair = sender.representedObject as? [String], pair.count == 2 else { return }
         onSetSpaceIcon?(pair[0], pair[1])
+    }
+
+    @objc private func pickAccent(_ sender: NSMenuItem) {
+        guard let pair = sender.representedObject as? [String], pair.count == 2,
+              let i = Int(pair[1]) else { return }
+        onSetSpaceAccent?(pair[0], i)
     }
 
     @objc private func clearIcon(_ sender: NSMenuItem) {
@@ -451,9 +510,21 @@ extension SidebarController: NSOutlineViewDelegate {
     }
 
     /// Use the pill row so selection is a rounded inset highlight rather than
-    /// AppKit's full-bleed default.
+    /// AppKit's full-bleed default. The pill carries the current space's accent,
+    /// which is what makes "which space am I in" answerable at a glance.
     public func outlineView(_ v: NSOutlineView, rowViewForItem item: Any) -> NSTableRowView? {
-        PillRowView()
+        let row = PillRowView()
+        row.accent = Self.accentColor(spaces.currentSpace?.accent)
+        return row
+    }
+
+    /// Fixed palette, indexed. Uses system colours so it tracks the user's
+    /// appearance and accessibility settings rather than hard-coded hex.
+    public static func accentColor(_ index: Int?) -> NSColor {
+        guard let index else { return .controlAccentColor }
+        let palette: [NSColor] = [.systemBlue, .systemPurple, .systemPink,
+                                  .systemOrange, .systemGreen, .systemTeal]
+        return palette[max(0, min(palette.count - 1, index))]
     }
 
     public func outlineViewSelectionDidChange(_ n: Notification) {

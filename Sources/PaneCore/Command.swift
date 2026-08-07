@@ -25,6 +25,7 @@ public enum Command: Equatable, Sendable {
     case newSpace(name: String)
     case renameSpace(String, String)
     case setSpaceIcon(String, String?)
+    case setSpaceAccent(String, Int?)
     case deleteSpace(String)
     case nextSpace
     case previousSpace

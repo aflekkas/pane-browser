@@ -181,6 +181,12 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
             sidebar.spaces = spaceModel
             persistSpaces()
 
+        case .setSpaceAccent(let id, let index):
+            spaceModel.setAccent(id, to: index)
+            sidebar.spaces = spaceModel
+            sidebar.reloadRows()
+            persistSpaces()
+
         case .setSpaceIcon(let id, let symbol):
             spaceModel.setIcon(id, to: symbol)
             sidebar.spaces = spaceModel
@@ -264,8 +270,16 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
         sidebar.onNewSpace = { [weak self] in self?.dispatch(.newSpace(name: $0)) }
         sidebar.onRenameSpace = { [weak self] id, name in self?.dispatch(.renameSpace(id, name)) }
         sidebar.onSetSpaceIcon = { [weak self] id, sym in self?.dispatch(.setSpaceIcon(id, sym)) }
+        sidebar.onSetSpaceAccent = { [weak self] id, i in self?.dispatch(.setSpaceAccent(id, i)) }
         sidebar.onDeleteSpace = { [weak self] in self?.dispatch(.deleteSpace($0)) }
         sidebar.onNewTab = { [weak self] in self?.dispatch(.newTab(kind: .ephemeral)) }
+        sidebar.onShowDownloads = { [weak self] in self?.showDownloadsPanel() }
+        downloads.onChange = { [weak self] in
+            guard let self else { return }
+            self.sidebar.setDownloadState(
+                active: self.downloads.items.filter { !$0.isFinished && $0.failure == nil }.count,
+                finished: self.downloads.items.filter(\.isFinished).count)
+        }
         persistSpaces()
     }
 
