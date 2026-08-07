@@ -25,6 +25,14 @@ if args.contains("--bench-restore") {
     app.run()
 }
 
+// spec §3 — milestone D's gate.
+if args.contains("--verify-isolation") {
+    let app = NSApplication.shared
+    app.setActivationPolicy(.accessory)
+    Task { @MainActor in exit(await IsolationCheck.run()) }
+    app.run()
+}
+
 if args.contains("--drm-probe") {
     let app = NSApplication.shared
     app.setActivationPolicy(.accessory)

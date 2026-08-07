@@ -235,6 +235,62 @@ public actor Store {
         return out
     }
 
+    // MARK: - Spaces and profiles (spec §3)
+
+    public func saveSpaces(_ spaces: [Space], profiles: [Profile]) throws {
+        try exec("BEGIN IMMEDIATE")
+        do {
+            try exec("DELETE FROM space"); try exec("DELETE FROM profile")
+            for p in profiles {
+                var st: OpaquePointer?
+                guard sqlite3_prepare_v2(db, "INSERT INTO profile(id,name,data_store_uuid,created_at) VALUES(?,?,?,?)",
+                                         -1, &st, nil) == SQLITE_OK else { throw err() }
+                defer { sqlite3_finalize(st) }
+                bindText(st, 1, p.id); bindText(st, 2, p.name)
+                bindText(st, 3, p.dataStoreUUID.uuidString)
+                sqlite3_bind_double(st, 4, p.createdAt.timeIntervalSince1970)
+                guard sqlite3_step(st) == SQLITE_DONE else { throw err() }
+            }
+            for sp in spaces {
+                var st: OpaquePointer?
+                guard sqlite3_prepare_v2(db, "INSERT INTO space(id,name,icon,color,profile_id,sort_index) VALUES(?,?,?,NULL,?,?)",
+                                         -1, &st, nil) == SQLITE_OK else { throw err() }
+                defer { sqlite3_finalize(st) }
+                bindText(st, 1, sp.id); bindText(st, 2, sp.name); bindText(st, 3, sp.icon)
+                bindText(st, 4, sp.profileID)
+                sqlite3_bind_int(st, 5, Int32(sp.sortIndex))
+                guard sqlite3_step(st) == SQLITE_DONE else { throw err() }
+            }
+            try exec("COMMIT")
+        } catch { try? exec("ROLLBACK"); throw error }
+    }
+
+    public func loadSpaces() throws -> (spaces: [Space], profiles: [Profile]) {
+        var profiles: [Profile] = []
+        var st: OpaquePointer?
+        if sqlite3_prepare_v2(db, "SELECT id,name,data_store_uuid,created_at FROM profile", -1, &st, nil) == SQLITE_OK {
+            while sqlite3_step(st) == SQLITE_ROW {
+                guard let id = text(st, 0), let name = text(st, 1),
+                      let u = text(st, 2).flatMap(UUID.init(uuidString:)) else { continue }
+                profiles.append(Profile(id: id, name: name, dataStoreUUID: u,
+                                        createdAt: Date(timeIntervalSince1970: sqlite3_column_double(st, 3))))
+            }
+        }
+        sqlite3_finalize(st)
+
+        var spaces: [Space] = []
+        var st2: OpaquePointer?
+        if sqlite3_prepare_v2(db, "SELECT id,name,icon,profile_id,sort_index FROM space ORDER BY sort_index", -1, &st2, nil) == SQLITE_OK {
+            while sqlite3_step(st2) == SQLITE_ROW {
+                guard let id = text(st2, 0), let name = text(st2, 1), let pid = text(st2, 3) else { continue }
+                spaces.append(Space(id: id, name: name, icon: text(st2, 2), profileID: pid,
+                                    sortIndex: Int(sqlite3_column_int(st2, 4))))
+            }
+        }
+        sqlite3_finalize(st2)
+        return (spaces, profiles)
+    }
+
     // MARK: - Session snapshots (spec §4)
 
     public func saveSnapshot(_ tabID: TabID, state: Data, at when: Date = Date()) throws {

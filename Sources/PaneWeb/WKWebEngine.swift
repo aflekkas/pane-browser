@@ -12,6 +12,16 @@ public final class WKWebEngine: NSObject, WebEngine {
     public var onEvent: ((WebEngineEvent) -> Void)?
     private var observers: [NSKeyValueObservation] = []
 
+    /// spec §3 — the identified data store is what makes spaces real. Handing
+    /// in `.default()` would silently share one cookie jar across every space,
+    /// which is the exact failure this API exists to prevent.
+    public static func store(forProfile uuid: UUID) -> WKWebsiteDataStore {
+        if #available(macOS 14.0, *) {
+            return WKWebsiteDataStore(forIdentifier: uuid)
+        }
+        return .default()
+    }
+
     public init(dataStore: WKWebsiteDataStore = .default()) {
         let config = WKWebViewConfiguration()
         config.websiteDataStore = dataStore
