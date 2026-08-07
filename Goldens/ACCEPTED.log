@@ -1,1 +1,2 @@
 2026-08-07  sidebar-populated  ratio=initial  First golden. Hermetic scene: fixed titles, no navigation, no favicon fetch, sidebar region only.
+unstamped  sidebar-populated  ratio=0.0000  Header nav moved beside traffic lights, section spacer 14->10, space pills hug content, address field alpha 0.16->0.32

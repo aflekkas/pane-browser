@@ -820,9 +820,12 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
         addressBar.action = #selector(commitAddress)
         addressBar.isBezeled = false
         addressBar.drawsBackground = true
-        addressBar.backgroundColor = .quaternaryLabelColor.withAlphaComponent(0.16)
+        // 0.16 alpha was invisible on a dark sidebar — the field read as empty
+        // space with text floating in it rather than as an input.
+        addressBar.backgroundColor = .quaternaryLabelColor.withAlphaComponent(0.32)
         addressBar.focusRingType = .none
-        addressBar.font = .systemFont(ofSize: 12)
+        addressBar.font = .systemFont(ofSize: 12.5)
+        addressBar.textColor = .labelColor
         addressBar.wantsLayer = true
         addressBar.layer?.cornerRadius = 8
         addressBar.cell?.usesSingleLineMode = true
@@ -861,12 +864,16 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
             side.bottomAnchor.constraint(equalTo: content.bottomAnchor),
             sidebarWidth,
 
-            // Traffic lights sit over the sidebar; leave them room.
-            navRow.topAnchor.constraint(equalTo: header.topAnchor, constant: 22),
-            navRow.leadingAnchor.constraint(equalTo: header.leadingAnchor, constant: 8),
+            // Traffic lights overlay the sidebar (fullSizeContentView) and sit
+            // at roughly x 20–62, y 14–28. Arc puts the nav buttons on the SAME
+            // row, inset past them, rather than below — which is what keeps the
+            // header to two rows instead of three and stops the address bar
+            // being pushed down into the list.
+            navRow.centerYAnchor.constraint(equalTo: header.topAnchor, constant: 15),
+            navRow.leadingAnchor.constraint(equalTo: header.leadingAnchor, constant: 76),
             navRow.heightAnchor.constraint(equalToConstant: 22),
 
-            addressBar.topAnchor.constraint(equalTo: navRow.bottomAnchor, constant: 6),
+            addressBar.topAnchor.constraint(equalTo: header.topAnchor, constant: 34),
             addressBar.leadingAnchor.constraint(equalTo: header.leadingAnchor, constant: 10),
             addressBar.trailingAnchor.constraint(equalTo: header.trailingAnchor, constant: -10),
             addressBar.heightAnchor.constraint(equalToConstant: 26),

@@ -179,7 +179,7 @@ final class PillRowView: NSTableRowView {
 final class EssentialsRowView: NSView {
     private let onSelect: (TabID) -> Void
 
-    init(ids: [TabID], model: TabModel, onSelect: @escaping (TabID) -> Void) {
+    init(ids: [TabID], model: TabModel, columns: Int = 4, onSelect: @escaping (TabID) -> Void) {
         self.onSelect = onSelect
         super.init(frame: .zero)
 
@@ -225,10 +225,10 @@ final class EssentialsRowView: NSView {
         // Zen uses grid auto-fit with a 48px minimum, so the column count
         // REFLOWS as the sidebar narrows rather than squashing four tiles into
         // pills. Fillers keep a short final row left-aligned.
-        // Pad the final short row so tiles stay their natural size rather than
-        // stretching to fill.
-        let columns = max(ids.count, 4)
-        for _ in ids.count..<columns {
+        // Pad the final short row to the row's ACTUAL column count. Padding to
+        // a hard-coded four stretched every tile when the sidebar was narrow
+        // enough to fit only two or three.
+        for _ in ids.count..<max(ids.count, columns) {
             let filler = NSView()
             filler.translatesAutoresizingMaskIntoConstraints = false
             stack.addArrangedSubview(filler)

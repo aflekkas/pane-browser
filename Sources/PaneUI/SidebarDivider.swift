@@ -9,8 +9,10 @@ final class SidebarDivider: NSView {
     private var lastX: CGFloat?
 
     override func draw(_ dirtyRect: NSRect) {
-        NSColor.separatorColor.setFill()
-        // Hairline down the middle of the wider hit area.
+        // separatorColor is nearly invisible against a dark sidebar next to a
+        // dark content area — the two panes read as one surface with a seam.
+        // A slightly stronger line is what actually separates them.
+        NSColor.separatorColor.blended(withFraction: 0.35, of: .labelColor)?.setFill()
         NSRect(x: bounds.midX - 0.5, y: 0, width: 1, height: bounds.height).fill()
     }
 

@@ -19,7 +19,12 @@ public final class SidebarController: NSViewController {
     /// rows of four to give the icon grid §5 asks for.
     enum Row: Hashable {
         case spacer(TabKind)
-        case essentialsRow([TabID])
+        /// Selection is part of the row's IDENTITY, not just its content.
+        /// Comparing by TabIDs alone made `rebuild()`'s `next != rows` guard
+        /// skip the reload when only the selection changed — so clicking an
+        /// essential visibly did nothing. A row's equality must cover
+        /// everything it draws.
+        case essentialsRow([TabID], selected: TabID?)
         case tab(TabID)
     }
 
@@ -72,6 +77,9 @@ public final class SidebarController: NSViewController {
     }
     private let scroll = NSScrollView()
     private var rows: [Row] = []
+    /// The live column count, so the row view pads to the real width rather
+    /// than always assuming four — which halved tile width at narrow sidebars.
+    private(set) var essentialsColumns = 4
 
     /// Custom UTI carrying tab IDs, with a `public.url` fallback so a drag out
     /// to Finder or another app still means something (spec §5).
@@ -161,6 +169,7 @@ public final class SidebarController: NSViewController {
         newTabButton.title = "  New Tab"
         newTabButton.font = .systemFont(ofSize: 13)
         newTabButton.contentTintColor = .secondaryLabelColor
+        newTabButton.font = .systemFont(ofSize: 13, weight: .medium)
         newTabButton.alignment = .left
         newTabButton.target = self
         newTabButton.action = #selector(newTabTapped)
@@ -176,7 +185,10 @@ public final class SidebarController: NSViewController {
         // Spaces live at the BOTTOM, as in Arc and Zen.
         spaceBar.translatesAutoresizingMaskIntoConstraints = false
         spaceBar.orientation = .horizontal
-        spaceBar.distribution = .fillEqually
+        // NOT .fillEqually: it treats the "+" as a space, handing a 13pt glyph
+        // the same column as a named pill and stranding it in dead air. Pills
+        // size to their content; only "+" is pinned.
+        spaceBar.distribution = .fill
         spaceBar.spacing = 3          // Zen workspace strip gap
         view.addSubview(spaceBar)
 
@@ -259,14 +271,29 @@ public final class SidebarController: NSViewController {
                 .foregroundColor: isCurrent ? NSColor.labelColor : NSColor.secondaryLabelColor,
             ])
             b.identifier = NSUserInterfaceItemIdentifier(sp.id)
+            // Hug content: a pill should be as wide as its name, not as wide as
+            // the strip. .fill without hugging made a single space stretch the
+            // whole sidebar, which reads as a progress bar, not a chip.
+            b.setContentHuggingPriority(.defaultHigh, for: .horizontal)
+            b.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
             // spec §5 — a space pill is a drop target, so a tab can be moved
             // between spaces by dragging it onto one.
             b.registerForDraggedTypes([Self.tabUTI])
             b.onTabDropped = { [weak self] tabID in self?.onMoveTabToSpace?(tabID, sp.id) }
             spaceBar.addArrangedSubview(b)
         }
+        // Flexible spacer so pills sit left and "+" sits right, instead of the
+        // stack distributing slack into the pills themselves.
+        let spacer = NSView()
+        spacer.translatesAutoresizingMaskIntoConstraints = false
+        spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        spaceBar.addArrangedSubview(spacer)
+
         let plus = NSButton(title: "+", target: self, action: #selector(newSpaceTapped))
         plus.isBordered = false
+        plus.translatesAutoresizingMaskIntoConstraints = false
+        plus.widthAnchor.constraint(equalToConstant: 22).isActive = true
+        plus.setContentHuggingPriority(.required, for: .horizontal)
         plus.attributedTitle = NSAttributedString(string: "+", attributes: [
             .font: NSFont.systemFont(ofSize: 13),
             .foregroundColor: NSColor.tertiaryLabelColor,
@@ -410,9 +437,10 @@ public final class SidebarController: NSViewController {
             let inner = max(120, (outline.bounds.width > 1 ? outline.bounds.width
                                                           : scroll.bounds.width) - 20)
             let columns = max(2, min(5, Int(inner / 52)))
+            self.essentialsColumns = columns
             for chunk in stride(from: 0, to: essentials.count, by: columns) {
                 let slice = essentials[chunk..<min(chunk + columns, essentials.count)]
-                next.append(.essentialsRow(slice.map(\.id)))
+                next.append(.essentialsRow(slice.map(\.id), selected: model.selected))
             }
         }
         let pinned = model.section(.pinned)
@@ -502,7 +530,7 @@ extension SidebarController: NSOutlineViewDataSource {
         for i in 0..<min(row, rows.count) {
             switch rows[i] {
             case .spacer(let k): kind = k; offset = 0
-            case .essentialsRow(let ids): kind = .essential; offset += ids.count
+            case .essentialsRow(let ids, _): kind = .essential; offset += ids.count
             case .tab: offset += 1
             }
         }
@@ -552,7 +580,7 @@ extension SidebarController: NSOutlineViewDelegate {
     public func outlineView(_ v: NSOutlineView, heightOfRowByItem item: Any) -> CGFloat {
         guard let row = item as? Int, row < rows.count else { return 28 }
         switch rows[row] {
-        case .spacer:        return 14
+        case .spacer:        return 10   // Zen separates sections with space, not a gulf
         // Square tiles: four across the sidebar's inner width, so the row must
         // be as tall as a tile is wide. A fixed height turns them into pills as
         // the sidebar resizes.
@@ -575,8 +603,10 @@ extension SidebarController: NSOutlineViewDelegate {
         switch rows[row] {
         case .spacer:
             return NSView()                                   // §5: spacing, not headers
-        case .essentialsRow(let ids):
-            return EssentialsRowView(ids: ids, model: model) { [weak self] in self?.onSelect?($0) }
+        case .essentialsRow(let ids, _):
+            return EssentialsRowView(ids: ids, model: model, columns: essentialsColumns) {
+                [weak self] in self?.onSelect?($0)
+            }
         case .tab(let id):
             guard let tab = model[id] else { return nil }
             return TabRowView(tab: tab) { [weak self] in self?.onClose?(id) }
