@@ -68,6 +68,13 @@ if [ "$MODE" = phase ] && [ -f .build/debug/Pane ]; then
   step "sidebar scroll at 200 rows (spec §5)"
   .build/debug/Pane --bench-scroll --rows 200 || FAIL=1
 
+  step "credential bridge isolation (spec §7)"
+  ./Fixtures/fixture_server.py --port 8781 >/dev/null 2>&1 &
+  FXPID=$!
+  sleep 3
+  .build/debug/Pane --verify-vault "http://127.0.0.1:8781/form" || FAIL=1
+  kill $FXPID 2>/dev/null
+
   step "profile isolation (spec §3)"
   .build/debug/Pane --verify-isolation >/dev/null || FAIL=1
 fi

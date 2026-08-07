@@ -63,6 +63,14 @@ if args.contains("--bench-scroll") {
     app.run()
 }
 
+if let i = args.firstIndex(of: "--verify-vault"), i + 1 < args.count,
+   let u = URL(string: args[i + 1]) {
+    let app = NSApplication.shared
+    app.setActivationPolicy(.accessory)
+    Task { @MainActor in exit(await VaultCheck.run(formURL: u)) }
+    app.run()
+}
+
 if args.contains("--drm-probe") {
     let app = NSApplication.shared
     app.setActivationPolicy(.accessory)

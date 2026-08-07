@@ -272,8 +272,14 @@ of X" note in `docs/api-notes/quarantine.md`.
 
 ## Milestone F — it's yours
 
-- [ ] Credential vault — keychain, `.userPresence`, per-profile, save/fill/update
+- [x] Credential vault — keychain, per-profile, save/list/delete. Protection is
+      **explicit**: `.userPresence` requires a real signing identity, so a dev
+      build runs `deviceUnlockedOnly` and says so (ADR 0007)
+- [x] Form detection and autofill through an **isolated** `WKContentWorld`,
+      verified invisible to page script
 - [ ] Import — Safari and Chrome CSV, 1Password `.1pux`
+- [ ] Save/update prompt UI (detection and fill work; the native popover that
+      offers to save is not built)
 - [ ] Passkeys — entitlement plumbing and UI only, **no WebAuthn reimplementation**
 
 **Gate:** vault save/fill/update against fixture login forms with Touch ID

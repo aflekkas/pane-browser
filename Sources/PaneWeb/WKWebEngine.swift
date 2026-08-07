@@ -22,6 +22,8 @@ public final class WKWebEngine: NSObject, WebEngine {
     public var authHandler: ((URLAuthenticationChallenge) async -> (URLSession.AuthChallengeDisposition, URLCredential?))?
     public var openPanelHandler: ((WKOpenPanelParameters, @escaping ([URL]?) -> Void) -> Void)?
     public var jsDialogHandler: ((String, String, @escaping (Bool) -> Void) -> Void)?
+    /// spec §7 — a login form was seen or submitted in the page.
+    public var onLoginForm: ((LoginFormInfo) -> Void)?
     private var observers: [NSKeyValueObservation] = []
 
     /// spec §3 — the identified data store is what makes spaces real. Handing
@@ -49,8 +51,14 @@ public final class WKWebEngine: NSObject, WebEngine {
         // spec §6 — the escape hatch for a page that keeps killing its renderer.
         config.defaultWebpagePreferences.allowsContentJavaScript = allowsJavaScript
 
+        // spec §7 — detection script in an ISOLATED world. The handler is
+        // registered for that world too, so page script cannot reach it.
+        config.userContentController.addUserScript(CredentialBridge.userScript)
+
         self.webView = PaneWebView(frame: .zero, configuration: config)
         super.init()
+        config.userContentController.addScriptMessageHandler(
+            self, contentWorld: CredentialBridge.world, name: CredentialBridge.messageName)
         webView.allowsBackForwardNavigationGestures = true
         webView.navigationDelegate = self
         webView.uiDelegate = self
@@ -83,6 +91,28 @@ public final class WKWebEngine: NSObject, WebEngine {
     public func goForward() { webView.goForward() }
     public func reload() { webView.reload() }
     public func stopLoading() { webView.stopLoading() }
+
+    /// spec §7 — fill, into the isolated world. `callAsyncJavaScript` in that
+    /// world can still touch the DOM, which is what the fill needs; it just
+    /// cannot be seen by page script.
+    ///
+    /// Success is confirmed by reading the DOM back, **not** by trusting the
+    /// call's return value: `callAsyncJavaScript(_:arguments:in:in:)` bridges
+    /// its result as `Void` here regardless of what the JS returns, so
+    /// `as? Bool` is always nil and a working fill reports failure. Measured —
+    /// it cost an hour. See docs/api-notes/webkit.md.
+    public func fillCredentials(username: String, password: String) async -> Bool {
+        _ = try? await webView.callAsyncJavaScript(
+            "window.__paneFill(u, p);",
+            arguments: ["u": username, "p": password],
+            in: nil, in: CredentialBridge.world)
+        // Read back through the ONE-ARGUMENT evaluateJavaScript, which does
+        // bridge its result. Reading from the page world is deliberate: it
+        // proves the isolated world's DOM write actually crossed the boundary.
+        let readBack: Any? = try? await webView.evaluateJavaScript(
+            "document.querySelector('input[type=password]')?.value ?? ''")
+        return (readBack as? String) == password
+    }
 
     /// spec §4 — the blob the entire discard/restore claim rests on.
     public func captureInteractionState() -> Data? {
@@ -131,6 +161,19 @@ extension WKWebEngine {
     @objc private func openCurrentInNewTab(_ sender: NSMenuItem) {
         guard let url = sender.representedObject as? URL else { return }
         onOpenInNewTab?(url)
+    }
+}
+
+extension WKWebEngine: WKScriptMessageHandlerWithReply {
+    public func userContentController(_ c: WKUserContentController,
+                                      didReceive message: WKScriptMessage) async
+        -> (Any?, String?) {
+        // Untrusted input from a web page: parsed through a closed struct and
+        // dropped if it does not fit, never consumed as a loose dictionary.
+        guard message.name == CredentialBridge.messageName,
+              let info = LoginFormInfo(message.body) else { return (nil, nil) }
+        onLoginForm?(info)
+        return (nil, nil)
     }
 }
 
