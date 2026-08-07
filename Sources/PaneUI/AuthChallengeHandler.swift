@@ -102,8 +102,10 @@ public enum AuthChallengeHandler {
         }
 
         let reason = (error as Error?)?.localizedDescription ?? "The certificate could not be verified."
-        let allowed = await presentInterstitial(host: host, reason: reason,
-                                                fingerprint: fingerprint, window: window)
+        let allowed = await presentInterstitial(
+            host: host, reason: reason, fingerprint: fingerprint, window: window,
+            severity: CertInterstitialView.severity(for: error),
+            chain: CertInterstitialView.chainSummary(trust))
         guard allowed, let fingerprint else { return (.cancelAuthenticationChallenge, nil) }
 
         // spec §6: "never permanent by default". Session-scoped.
@@ -173,8 +175,34 @@ public enum AuthChallengeHandler {
     /// spec §1 — a native, full-content interstitial. Never a web-rendered
     /// error page: that would put UI inside a renderer we do not trust, which
     /// is the exact attack the invariant exists to prevent.
+    /// Host supplies the content area to cover, so the interstitial replaces
+    /// the page rather than floating over it as a sheet.
+    public static var interstitialHost: ((CertInterstitialView) -> Void)?
+    public static var interstitialDismiss: (() -> Void)?
+
     private static func presentInterstitial(host: String, reason: String,
-                                            fingerprint: String?, window: NSWindow?) async -> Bool {
+                                            fingerprint: String?, window: NSWindow?,
+                                            severity: CertInterstitialView.Severity,
+                                            chain: [String]) async -> Bool {
+        // spec §6 — full content area, not a sheet, when a host is available.
+        if let mount = interstitialHost {
+            return await withCheckedContinuation { c in
+                var settled = false
+                let view = CertInterstitialView(host: host, reason: reason, severity: severity,
+                                                chain: chain, fingerprint: fingerprint)
+                view.onGoBack = {
+                    guard !settled else { return }; settled = true
+                    interstitialDismiss?(); c.resume(returning: false)
+                }
+                view.onProceed = {
+                    guard !settled else { return }; settled = true
+                    interstitialDismiss?(); c.resume(returning: true)
+                }
+                mount(view)
+            }
+        }
+        // Fallback when there is no content area to mount into (e.g. a
+        // download's own auth challenge).
         let alert = NSAlert()
         alert.alertStyle = .critical
         alert.messageText = "This Connection Is Not Private"

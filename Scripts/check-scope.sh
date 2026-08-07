@@ -53,11 +53,19 @@ fi
 ALLOW=Scripts/scope-allowlist.txt
 allowed() { [ -f "$ALLOW" ] && grep -qF -- "$1" "$ALLOW"; }
 
+# Match CODE, not prose. A rule that fires on the word appearing in a comment
+# explaining why we never use it trains people to ignore the rule — which is
+# worse than not having it. Comment-only lines are stripped before matching.
+code_lines() { sed -E 's://.*$::' "$1"; }
+
 check_grep() { # <label> <pattern> <path-glob>
   local label="$1" pat="$2" path="$3"
   [ -d "$SRC" ] || return 0
-  local hits
-  hits=$(grep -rlnE "$pat" --include='*.swift' "$path" 2>/dev/null || true)
+  local hits=""
+  local f
+  for f in $(find "$path" -name '*.swift' 2>/dev/null); do
+    code_lines "$f" | grep -qE "$pat" && hits="$hits $f"
+  done
   local any=0
   for h in $hits; do
     allowed "$h" && continue
@@ -72,8 +80,10 @@ check_grep "no SwiftUI in the sidebar or any list"  '^import SwiftUI'         "$
 # permitted to contain it — that is the whole point of the invariant, not an
 # exception to it.
 if [ -d "$SRC" ]; then
-  hits=$(grep -rlnE '\bsqlite3_' --include='*.swift' "$SRC" 2>/dev/null \
-         | grep -v '/PaneCore/Store\.swift$' || true)
+  hits=""
+  for f in $(find "$SRC" -name '*.swift' 2>/dev/null | grep -v '/PaneCore/Store\.swift$'); do
+    code_lines "$f" | grep -qE '\bsqlite3_' && hits="$hits $f"
+  done
   if [ -n "$hits" ]; then
     for h in $hits; do allowed "$h" || bad "all SQLite through the Store actor: $h"; done
   else ok "all SQLite through the Store actor"; fi
@@ -84,7 +94,10 @@ check_grep "no private API (leading-underscore)"    '\._[a-z][A-Za-z0-9]*\('  "$
 
 # No web content may render browser UI.
 if [ -d "$SRC" ]; then
-  hits=$(grep -rln 'loadHTMLString' --include='*.swift' "$SRC" 2>/dev/null | grep -v '/Fixtures/' || true)
+  hits=""
+  for f in $(find "$SRC" -name '*.swift' 2>/dev/null | grep -v '/Fixtures/'); do
+    code_lines "$f" | grep -q 'loadHTMLString' && hits="$hits $f"
+  done
   if [ -n "$hits" ]; then
     for h in $hits; do allowed "$h" || bad "no web content renders browser UI: $h"; done
   else ok "no web content renders browser UI"; fi

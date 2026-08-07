@@ -326,6 +326,22 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
         e.authHandler = { [weak self] challenge in
             await AuthChallengeHandler.respond(to: challenge, window: self?.window)
         }
+        // spec §6 — the cert interstitial covers the content area.
+        AuthChallengeHandler.interstitialHost = { [weak self] view in
+            guard let self else { return }
+            view.translatesAutoresizingMaskIntoConstraints = false
+            self.contentBox.addSubview(view)
+            NSLayoutConstraint.activate([
+                view.topAnchor.constraint(equalTo: self.contentBox.topAnchor),
+                view.leadingAnchor.constraint(equalTo: self.contentBox.leadingAnchor),
+                view.trailingAnchor.constraint(equalTo: self.contentBox.trailingAnchor),
+                view.bottomAnchor.constraint(equalTo: self.contentBox.bottomAnchor),
+            ])
+        }
+        AuthChallengeHandler.interstitialDismiss = { [weak self] in
+            self?.contentBox.subviews.compactMap { $0 as? CertInterstitialView }
+                .forEach { $0.removeFromSuperview() }
+        }
         engines[id] = e
         // spec §4: assign interactionState BEFORE the view enters the hierarchy.
         if let blob = states[id] {

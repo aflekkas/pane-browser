@@ -67,10 +67,21 @@ day one. But edits are ceremonial:
 | `docs/journal.md` | Append-only narrative, **including dead ends** | State |
 | `docs/research/` | Findings with citations, both sides of disputes | Opinions |
 | `docs/api-notes/` | Framework gotchas found the hard way | Design |
+| `docs/ui-parity.md` | Standing Arc-parity checklist | Feature scope |
 
 `PROGRESS.md` records *state*. `docs/journal.md` records *narrative*. Dead ends
 are the highest-value journal entries — the only record of work that produced no
 artifact. Without them it gets repeated.
+
+## Standing goal: UI parity with Arc
+
+Pane should reach visual and interaction parity with Arc on the **basic browser
+features** — layout, proportions, density, how interactions feel. Tracked in
+`docs/ui-parity.md`; measure against a real screenshot before ticking anything.
+
+**Not** custom theming, **not** transparency (that is milestone G), and **not**
+Arc's feature set. Parity means the basic features look right. Spec §0 still
+governs what exists at all.
 
 ## Anti-drift is enforced, not promised
 
