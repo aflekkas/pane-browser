@@ -277,9 +277,9 @@ of X" note in `docs/api-notes/quarantine.md`.
       build runs `deviceUnlockedOnly` and says so (ADR 0007)
 - [x] Form detection and autofill through an **isolated** `WKContentWorld`,
       verified invisible to page script
-- [ ] Import — Safari and Chrome CSV, 1Password `.1pux`
-- [ ] Save/update prompt UI (detection and fill work; the native popover that
-      offers to save is not built)
+- [x] Import — Safari CSV, Chrome CSV, 1Password `.1pux`. Columns matched by
+      NAME, RFC 4180 quoting, skipped rows reported with reasons
+- [x] Save/update prompt, account picker, and the fill flow
 - [ ] Passkeys — entitlement plumbing and UI only, **no WebAuthn reimplementation**
 
 **Gate:** vault save/fill/update against fixture login forms with Touch ID

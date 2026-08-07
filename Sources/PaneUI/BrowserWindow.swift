@@ -588,6 +588,47 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
     /// left the title bar and address bar showing the *previous* tab's page —
     /// visible in the first sidebar screenshot as "DuckDuckGo" in the title
     /// while Hacker News was selected.
+    /// spec §7 — "This is your migration story and it is not optional."
+    @objc public func importCredentials() {
+        let panel = NSOpenPanel()
+        panel.message = "Choose a password export from Safari, Chrome or 1Password."
+        panel.allowedContentTypes = [.commaSeparatedText, .data]
+        panel.allowsOtherFileTypes = true
+        panel.canChooseDirectories = false
+        guard panel.runModal() == .OK, let url = panel.url,
+              let data = try? Data(contentsOf: url) else { return }
+
+        let result = CredentialImport.parse(data, filename: url.lastPathComponent)
+        let profile = spaceModel.currentSpace?.profileID ?? "default"
+        var saved = 0
+        var failed: [String] = []
+        for entry in result.entries {
+            do {
+                try vault.save(origin: entry.origin, username: entry.username,
+                               password: entry.password, profileID: profile)
+                saved += 1
+            } catch {
+                failed.append("\(entry.origin) (\(entry.username)): \(error)")
+            }
+        }
+
+        let alert = NSAlert()
+        alert.messageText = saved > 0 ? "Imported \(saved) passwords" : "Nothing was imported"
+        // Report what did NOT come through, and why. An import that says
+        // "42 imported" while discarding 9 without explanation is how people
+        // lose credentials they think they migrated.
+        var detail = "Format: \(result.format)\nInto space: \(spaceModel.currentSpace?.name ?? "current")"
+        let problems = result.skipped + failed
+        if !problems.isEmpty {
+            detail += "\n\nSkipped \(problems.count):\n"
+                + problems.prefix(12).joined(separator: "\n")
+            if problems.count > 12 { detail += "\n… and \(problems.count - 12) more" }
+        }
+        alert.informativeText = detail
+        alert.addButton(withTitle: "Done")
+        alert.runModal()
+    }
+
     /// spec §7 — offer to fill on detection, offer to save on submit.
     private func handleLoginForm(_ info: LoginFormInfo, tab id: TabID) async {
         guard let engine = engines[id],

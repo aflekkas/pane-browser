@@ -32,5 +32,6 @@ await storeChecks(check)
 spaceChecks(check)
 tabKindChecks(check)
 vaultChecks(check)
+importChecks(check)
 
 exit(check.run())
