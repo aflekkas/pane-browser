@@ -1,0 +1,9 @@
+.build/
+.swiftpm/
+DerivedData/
+*.app
+*.dSYM
+.pane-artifacts/
+.pane-gate.log
+docs/reference/
+.DS_Store
