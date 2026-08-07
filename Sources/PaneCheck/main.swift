@@ -13,8 +13,8 @@ check.suite("URLNormalizer") { e in
             "localhost with a port is a host, not a search")
     e.equal(URLNormalizer.resolve("http://example.com")?.scheme, "http",
             "an explicit scheme is preserved")
-    e.equal(URLNormalizer.resolve("how tall is nelson's column")?.host, "duckduckgo.com",
-            "prose becomes a search, not a malformed URL")
+    e.equal(URLNormalizer.resolve("how tall is nelson's column")?.host, "www.google.com",
+            "prose becomes a Google search, not a malformed URL")
     // Would otherwise resolve to https://3.14 — a real address-bar bug.
     e.that(URLNormalizer.looksLikeHost("3.14") == false,
            "a dotted token with a numeric TLD is not a host")

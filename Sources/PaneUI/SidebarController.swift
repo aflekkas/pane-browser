@@ -24,11 +24,27 @@ public final class SidebarController: NSViewController {
     }
 
     public var model = TabModel() { didSet { rebuild() } }
+    /// spec §3 — the space switcher. A strip of pills above the tab list, one
+    /// per space, because a space with no visible affordance is a feature
+    /// nobody finds.
+    public var spaces = SpaceModel() { didSet { rebuildSpaceBar() } }
+    public var onSelectSpace: ((String) -> Void)?
+    public var onNewSpace: ((String) -> Void)?
+    public var onRenameSpace: ((String, String) -> Void)?
+    public var onSetSpaceIcon: ((String, String?) -> Void)?
+    public var onDeleteSpace: ((String) -> Void)?
     public var onSelect: ((TabID) -> Void)?
     public var onClose: ((TabID) -> Void)?
     public var onReorder: ((TabID, Int, TabKind) -> Void)?
 
     private let outline = NSOutlineView()
+    private let spaceBar = NSStackView()
+    /// Filled by the window controller with nav buttons and the address field.
+    /// Arc and Zen both put the URL bar *inside* the sidebar, which is what
+    /// leaves the content area with no chrome above it at all — that is the
+    /// defining move, more than any spacing value.
+    public let header = NSView()
+    private let newTabButton = NSButton()
     private let scroll = NSScrollView()
     private var rows: [Row] = []
 
@@ -78,6 +94,36 @@ public final class SidebarController: NSViewController {
         outline.setDraggingSourceOperationMask(.move, forLocal: true)
         outline.setDraggingSourceOperationMask(.copy, forLocal: false)
 
+        header.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(header)
+
+        // spec §5 — "+ New Tab" as the last row of the list, per the Arc
+        // reference in docs/reference/arc-sidebar.md.
+        newTabButton.translatesAutoresizingMaskIntoConstraints = false
+        newTabButton.isBordered = false
+        newTabButton.image = NSImage(systemSymbolName: "plus", accessibilityDescription: nil)
+        newTabButton.imagePosition = .imageLeading
+        newTabButton.title = "  New Tab"
+        newTabButton.font = .systemFont(ofSize: 13)
+        newTabButton.contentTintColor = .secondaryLabelColor
+        newTabButton.alignment = .left
+        newTabButton.target = self
+        newTabButton.action = #selector(newTabTapped)
+        view.addSubview(newTabButton)
+
+        // Spaces live at the BOTTOM, as in Arc and Zen.
+        spaceBar.translatesAutoresizingMaskIntoConstraints = false
+        spaceBar.orientation = .horizontal
+        spaceBar.distribution = .fillEqually
+        spaceBar.spacing = 2
+        view.addSubview(spaceBar)
+
+        let hairline = NSBox()
+        hairline.boxType = .separator
+        hairline.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(hairline)
+        self.bottomHairline = hairline
+
         scroll.documentView = outline
         scroll.hasVerticalScroller = true
         scroll.drawsBackground = false
@@ -86,14 +132,174 @@ public final class SidebarController: NSViewController {
         scroll.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(scroll)
         NSLayoutConstraint.activate([
-            scroll.topAnchor.constraint(equalTo: view.topAnchor),
+            // Header: traffic-light clearance, then nav + address field.
+            header.topAnchor.constraint(equalTo: view.topAnchor, constant: 6),
+            header.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            header.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            header.heightAnchor.constraint(equalToConstant: 72),
+
+            scroll.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 4),
             scroll.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             scroll.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            scroll.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            scroll.bottomAnchor.constraint(equalTo: newTabButton.topAnchor, constant: -2),
+
+            newTabButton.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 14),
+            newTabButton.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -10),
+            newTabButton.heightAnchor.constraint(equalToConstant: 28),
+            newTabButton.bottomAnchor.constraint(equalTo: hairline.topAnchor, constant: -6),
+
+            hairline.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 10),
+            hairline.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -10),
+            hairline.bottomAnchor.constraint(equalTo: spaceBar.topAnchor, constant: -6),
+            hairline.heightAnchor.constraint(equalToConstant: 1),
+
+            // Spaces pinned to the bottom.
+            spaceBar.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 8),
+            spaceBar.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -8),
+            spaceBar.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -10),
+            spaceBar.heightAnchor.constraint(equalToConstant: 26),
         ])
     }
 
+    private var bottomHairline: NSBox?
+    public var onNewTab: (() -> Void)?
+
     @objc private func noop() {}
+    @objc private func newTabTapped() { onNewTab?() }
+
+    /// One pill per space plus a "+". System colours only — no palette, no
+    /// theming; the accent colour is whatever the user set in System Settings.
+    private func rebuildSpaceBar() {
+        spaceBar.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        for sp in spaces.spaces {
+            let isCurrent = spaces.current == sp.id
+            let b = SpaceButton(title: sp.name, target: self, action: #selector(spaceTapped(_:)))
+            b.spaceID = sp.id
+            b.onContextMenu = { [weak self] in self?.showSpaceMenu(for: sp.id, from: b) }
+            if let sym = sp.icon {
+                b.image = NSImage(systemSymbolName: sym, accessibilityDescription: sp.name)
+                b.imagePosition = .imageLeading
+            }
+            b.isBordered = false
+            b.wantsLayer = true
+            b.layer?.cornerRadius = 7
+            b.layer?.backgroundColor = isCurrent
+                ? NSColor.controlAccentColor.withAlphaComponent(0.20).cgColor
+                : NSColor.clear.cgColor
+            b.attributedTitle = NSAttributedString(string: sp.name, attributes: [
+                .font: NSFont.systemFont(ofSize: 11, weight: isCurrent ? .semibold : .regular),
+                .foregroundColor: isCurrent ? NSColor.labelColor : NSColor.secondaryLabelColor,
+            ])
+            b.identifier = NSUserInterfaceItemIdentifier(sp.id)
+            spaceBar.addArrangedSubview(b)
+        }
+        let plus = NSButton(title: "+", target: self, action: #selector(newSpaceTapped))
+        plus.isBordered = false
+        plus.attributedTitle = NSAttributedString(string: "+", attributes: [
+            .font: NSFont.systemFont(ofSize: 13),
+            .foregroundColor: NSColor.tertiaryLabelColor,
+        ])
+        spaceBar.addArrangedSubview(plus)
+    }
+
+    @objc private func spaceTapped(_ sender: NSButton) {
+        guard let id = sender.identifier?.rawValue else { return }
+        onSelectSpace?(id)
+    }
+
+    @objc private func newSpaceTapped() {
+        // Zen-style: name it as you create it, rather than creating "Space 3"
+        // and making the user go find a rename command.
+        guard let field = promptForName(title: "New Space", initial: "") else { return }
+        onNewSpace?(field)
+    }
+
+    /// Right-click a space: rename, pick an icon, delete. Everything a space
+    /// needs and nothing it does not.
+    private func showSpaceMenu(for id: String, from view: NSView) {
+        guard let sp = spaces.spaces.first(where: { $0.id == id }) else { return }
+        let menu = NSMenu()
+
+        let rename = NSMenuItem(title: "Rename…", action: #selector(renameSpace(_:)), keyEquivalent: "")
+        rename.target = self
+        rename.representedObject = id
+        menu.addItem(rename)
+
+        let iconItem = NSMenuItem(title: "Icon", action: nil, keyEquivalent: "")
+        let iconMenu = NSMenu()
+        for sym in SpaceModel.iconChoices {
+            let mi = NSMenuItem(title: "", action: #selector(pickIcon(_:)), keyEquivalent: "")
+            mi.target = self
+            mi.representedObject = [id, sym]
+            mi.image = NSImage(systemSymbolName: sym, accessibilityDescription: sym)
+            mi.title = sym.replacingOccurrences(of: ".", with: " ").capitalized
+            mi.state = (sp.icon == sym) ? .on : .off
+            iconMenu.addItem(mi)
+        }
+        iconMenu.addItem(.separator())
+        let none = NSMenuItem(title: "No Icon", action: #selector(clearIcon(_:)), keyEquivalent: "")
+        none.target = self; none.representedObject = id
+        iconMenu.addItem(none)
+        iconItem.submenu = iconMenu
+        menu.addItem(iconItem)
+
+        if spaces.spaces.count > 1 {
+            menu.addItem(.separator())
+            let del = NSMenuItem(title: "Delete Space", action: #selector(deleteSpace(_:)), keyEquivalent: "")
+            del.target = self; del.representedObject = id
+            menu.addItem(del)
+        }
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: view.bounds.height), in: view)
+    }
+
+    @objc private func renameSpace(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String,
+              let sp = spaces.spaces.first(where: { $0.id == id }),
+              let name = promptForName(title: "Rename Space", initial: sp.name) else { return }
+        onRenameSpace?(id, name)
+    }
+
+    @objc private func pickIcon(_ sender: NSMenuItem) {
+        guard let pair = sender.representedObject as? [String], pair.count == 2 else { return }
+        onSetSpaceIcon?(pair[0], pair[1])
+    }
+
+    @objc private func clearIcon(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String else { return }
+        onSetSpaceIcon?(id, nil)
+    }
+
+    @objc private func deleteSpace(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String,
+              let sp = spaces.spaces.first(where: { $0.id == id }) else { return }
+        let alert = NSAlert()
+        alert.messageText = "Delete “\(sp.name)”?"
+        // Be precise about what is and is not destroyed. Releasing the data
+        // store reference does NOT delete the profile's cookies or logins;
+        // WKWebsiteDataStore.remove(forIdentifier:) would, and is not used.
+        alert.informativeText = "Its tabs will be closed. Saved logins and cookies for this space are kept on disk."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Delete")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        onDeleteSpace?(id)
+    }
+
+    /// spec §1 — panels are AppKit. No web content renders browser UI.
+    private func promptForName(title: String, initial: String) -> String? {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: "Cancel")
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 220, height: 24))
+        field.stringValue = initial
+        field.placeholderString = "Name"
+        alert.accessoryView = field
+        alert.window.initialFirstResponder = field
+        guard alert.runModal() == .alertFirstButtonReturn else { return nil }
+        let v = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        return v.isEmpty ? nil : v
+    }
 
     /// spec §5 — Essentials (icon grid, 4 per row), Pinned (list), Today (list),
     /// separated by spacing rather than headers.
@@ -224,5 +430,22 @@ extension SidebarController: NSOutlineViewDelegate {
     public func outlineViewSelectionDidChange(_ n: Notification) {
         guard let id = tabID(atRow: outline.selectedRow) else { return }
         if id != model.selected { onSelect?(id) }
+    }
+}
+
+
+/// An NSButton that reports right-clicks, so a space pill can carry a context
+/// menu without the sidebar having to hit-test manually.
+@MainActor
+final class SpaceButton: NSButton {
+    var spaceID: String?
+    var onContextMenu: (() -> Void)?
+
+    override func rightMouseDown(with event: NSEvent) { onContextMenu?() }
+
+    /// ctrl-click is the same gesture on macOS and users expect it to work.
+    override func mouseDown(with event: NSEvent) {
+        if event.modifierFlags.contains(.control) { onContextMenu?(); return }
+        super.mouseDown(with: event)
     }
 }

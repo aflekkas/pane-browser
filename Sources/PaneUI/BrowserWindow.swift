@@ -9,9 +9,42 @@ import PaneWeb
 /// reclaimed (spec §4, ADR 0001).
 @MainActor
 public final class BrowserWindowController: NSWindowController, NSTextFieldDelegate {
-    private var model = TabModel()
-    private var engines: [TabID: WKWebEngine] = [:]
-    private var states: [TabID: Data] = [:]          // interactionState for discarded tabs
+    // spec §3 — per-space state. Each space has its own tabs, its own engines
+    // and, crucially, its own WKWebsiteDataStore, so two spaces can be logged
+    // into the same site as different users simultaneously.
+    private var spaceModel = SpaceModel()
+    private var tabsBySpace: [String: TabModel] = [:]
+    private var enginesBySpace: [String: [TabID: WKWebEngine]] = [:]
+    private var statesBySpace: [String: [TabID: Data]] = [:]
+    private var storesBySpace: [String: WKWebsiteDataStore] = [:]
+
+    private var spaceID: String { spaceModel.current ?? "default" }
+
+    private var model: TabModel {
+        get { tabsBySpace[spaceID] ?? TabModel() }
+        set { tabsBySpace[spaceID] = newValue }
+    }
+    private var engines: [TabID: WKWebEngine] {
+        get { enginesBySpace[spaceID] ?? [:] }
+        set { enginesBySpace[spaceID] = newValue }
+    }
+    private var states: [TabID: Data] {
+        get { statesBySpace[spaceID] ?? [:] }
+        set { statesBySpace[spaceID] = newValue }
+    }
+
+    /// spec §3 — lazy profile activation. The data store is instantiated on
+    /// first use, never for every space at launch.
+    private func store(forSpace id: String) -> WKWebsiteDataStore {
+        if let s = storesBySpace[id] { return s }
+        guard let space = spaceModel.spaces.first(where: { $0.id == id }),
+              let profile = spaceModel.profile(for: space) else {
+            return .default()
+        }
+        let s = WKWebEngine.store(forProfile: profile.dataStoreUUID)
+        storesBySpace[id] = s
+        return s
+    }
 
     private let sidebar = SidebarController()
     private let contentBox = NSView()
@@ -53,10 +86,11 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
         sidebar.onClose    = { [weak self] in self?.dispatch(.closeTab($0)) }
         sidebar.onReorder  = { [weak self] id, i, kind in self?.reorder(id, i, kind) }
 
+        bootstrapSpaces()
         if restoreSession {
             restore(fallback: startURL)
         } else {
-            let home = startURL ?? URLNormalizer.resolve("duckduckgo.com")!
+            let home = startURL ?? URLNormalizer.homeURL
             dispatch(.newTab(kind: .ephemeral))
             dispatch(.navigate(home.absoluteString))
         }
@@ -93,7 +127,7 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
             addressBar.currentEditor()?.selectAll(nil)
 
         case .newTab(let kind):
-            let id = model.open(Tab(kind: kind, lastActiveAt: Date()))
+            let id = model.open(Tab(kind: kind, url: URLNormalizer.homeURL, lastActiveAt: Date()))
             _ = engine(for: id)
             showSelected()
             dispatch(.focusAddressBar)
@@ -112,7 +146,52 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
             if model.reopenLastClosed() != nil { showSelected() }
 
         case .toggleSidebar:
-            sidebarWidth.constant = sidebarWidth.constant > 0 ? 0 : 240
+            sidebarWidth.constant = sidebarWidth.constant > 0 ? 0 : 232
+
+        case .selectSpace(let id):
+            guard id != spaceModel.current else { return }
+            spaceModel.select(id)
+            if model.tabs.isEmpty {
+                let home = URLNormalizer.homeURL
+                let newID = model.open(Tab(kind: .ephemeral, url: home, lastActiveAt: Date()))
+                _ = engine(for: newID)
+            }
+            showSelected()
+            sidebar.spaces = spaceModel
+
+        case .newSpace(let name):
+            let s = spaceModel.addSpace(named: name)
+            tabsBySpace[s.id] = TabModel()
+            spaceModel.select(s.id)
+            let home = URLNormalizer.homeURL
+            let newID = model.open(Tab(kind: .ephemeral, url: home, lastActiveAt: Date()))
+            _ = engine(for: newID)
+            showSelected()
+            sidebar.spaces = spaceModel
+            persistSpaces()
+
+        case .renameSpace(let id, let name):
+            spaceModel.rename(id, to: name)
+            sidebar.spaces = spaceModel
+            persistSpaces()
+
+        case .setSpaceIcon(let id, let symbol):
+            spaceModel.setIcon(id, to: symbol)
+            sidebar.spaces = spaceModel
+            persistSpaces()
+
+        case .deleteSpace(let id):
+            guard spaceModel.spaces.count > 1 else { return }
+            spaceModel.removeSpace(id)
+            tabsBySpace[id] = nil
+            enginesBySpace[id] = nil
+            statesBySpace[id] = nil
+            // §3: release the reference. remove(forIdentifier:) DELETES the
+            // user's data and must never be used for teardown.
+            storesBySpace[id] = nil
+            sidebar.spaces = spaceModel
+            showSelected()
+            persistSpaces()
 
         case .sweepDiscardable:
             for id in model.discardCandidates(at: Date()) { discard(id) }
@@ -123,6 +202,45 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
         sidebar.model = model
         syncChrome()
         scheduleSave()
+    }
+
+    /// spec §3 — spaces are loaded from the store, or a single default space is
+    /// created on first run. A space always has a profile; a profile always has
+    /// a stable data-store UUID.
+    private func bootstrapSpaces() {
+        if let store {
+            let sem = DispatchSemaphore(value: 0)
+            Task {
+                if let loaded = try? await store.loadSpaces(), !loaded.spaces.isEmpty {
+                    await MainActor.run {
+                        self.spaceModel.load(spaces: loaded.spaces, profiles: loaded.profiles)
+                    }
+                }
+                sem.signal()
+            }
+            _ = sem.wait(timeout: .now() + 2)
+        }
+        if spaceModel.spaces.isEmpty {
+            spaceModel.addSpace(named: "Personal")
+        }
+        for s in spaceModel.spaces where tabsBySpace[s.id] == nil {
+            tabsBySpace[s.id] = TabModel()
+        }
+        sidebar.spaces = spaceModel
+        sidebar.onSelectSpace = { [weak self] in self?.dispatch(.selectSpace($0)) }
+        sidebar.onNewSpace = { [weak self] in self?.dispatch(.newSpace(name: $0)) }
+        sidebar.onRenameSpace = { [weak self] id, name in self?.dispatch(.renameSpace(id, name)) }
+        sidebar.onSetSpaceIcon = { [weak self] id, sym in self?.dispatch(.setSpaceIcon(id, sym)) }
+        sidebar.onDeleteSpace = { [weak self] in self?.dispatch(.deleteSpace($0)) }
+        sidebar.onNewTab = { [weak self] in self?.dispatch(.newTab(kind: .ephemeral)) }
+        persistSpaces()
+    }
+
+    private func persistSpaces() {
+        guard let store else { return }
+        let spaces = spaceModel.spaces
+        let profiles = Array(spaceModel.profiles.values)
+        Task { try? await store.saveSpaces(spaces, profiles: profiles) }
     }
 
     // MARK: - Persistence (spec §2, §4)
@@ -139,6 +257,7 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
     public func saveNow() {
         guard let store else { return }
         let tabs = model.tabs
+        let sid = spaceID
         // Capture live tabs' state too, so a crash loses at most the last
         // interaction rather than the whole session.
         var live: [(TabID, Data)] = []
@@ -147,7 +266,7 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
         }
         let pending = states
         Task {
-            try? await store.saveTabs(tabs, spaceID: nil)
+            try? await store.saveTabs(tabs, spaceID: sid)
             for (id, blob) in pending { try? await store.saveSnapshot(id, state: blob) }
             for (id, blob) in live { try? await store.saveSnapshot(id, state: blob) }
         }
@@ -161,7 +280,7 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
         let (loaded, snaps) = Store.loadSessionSync(path: storePathInUse)
 
         guard !loaded.isEmpty else {
-            let home = fallback ?? URLNormalizer.resolve("duckduckgo.com")!
+            let home = fallback ?? URLNormalizer.homeURL
             dispatch(.newTab(kind: .ephemeral))
             dispatch(.navigate(home.absoluteString))
             return
@@ -171,7 +290,10 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
             t.lifecycle = .discarded          // materialise lazily
             model.open(t, select: false)
         }
-        if let first = model.tabs.first { model.select(first.id, at: Date()) }
+        // Prefer a tab that has somewhere to go; restoring straight into a
+        // blank tab makes it look like the session was lost.
+        let landing = model.tabs.first(where: { $0.url != nil }) ?? model.tabs.first
+        if let landing { model.select(landing.id, at: Date()) }
         sidebar.model = model
         showSelected()
         syncChrome()
@@ -187,7 +309,7 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
     private func engine(for id: TabID) -> WKWebEngine? {
         if let e = engines[id] { return e }
         guard let tab = model[id] else { return nil }
-        let e = WKWebEngine()
+        let e = WKWebEngine(dataStore: store(forSpace: spaceID))
         e.onEvent = { [weak self] ev in self?.handle(ev, from: id) }
         engines[id] = e
         // spec §4: assign interactionState BEFORE the view enters the hierarchy.
@@ -311,89 +433,98 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
     private func buildChrome() {
         guard let window, let content = window.contentView else { return }
 
-        let bar = NSView()
-        bar.translatesAutoresizingMaskIntoConstraints = false
+        // Arc/Zen layout: nav controls and the address field live INSIDE the
+        // sidebar, so the content area has no chrome above it at all. That is
+        // the defining move — more than any spacing value (spec §5, and
+        // docs/reference/arc-sidebar.md).
+        let header = sidebar.header
+
+        let navRow = NSStackView()
+        navRow.translatesAutoresizingMaskIntoConstraints = false
+        navRow.orientation = .horizontal
+        navRow.spacing = 2
         for (btn, glyph, sel) in [
             (backButton, "chevron.left", #selector(mBack)),
             (forwardButton, "chevron.right", #selector(mForward)),
             (reloadButton, "arrow.clockwise", #selector(mReload)),
         ] {
             btn.image = NSImage(systemSymbolName: glyph, accessibilityDescription: nil)
-            btn.bezelStyle = .texturedRounded
+            btn.isBordered = false
+            btn.contentTintColor = .secondaryLabelColor
             btn.target = self; btn.action = sel
             btn.translatesAutoresizingMaskIntoConstraints = false
-            bar.addSubview(btn)
+            btn.widthAnchor.constraint(equalToConstant: 26).isActive = true
+            navRow.addArrangedSubview(btn)
         }
         backButton.isEnabled = false; forwardButton.isEnabled = false
 
         addressBar.translatesAutoresizingMaskIntoConstraints = false
-        addressBar.placeholderString = "Search or enter address"
+        addressBar.placeholderString = "Search or Enter URL…"
         addressBar.delegate = self
         addressBar.target = self
         addressBar.action = #selector(commitAddress)
-        addressBar.bezelStyle = .roundedBezel
+        addressBar.isBezeled = false
+        addressBar.drawsBackground = true
+        addressBar.backgroundColor = .quaternaryLabelColor.withAlphaComponent(0.16)
         addressBar.focusRingType = .none
-        bar.addSubview(addressBar)
+        addressBar.font = .systemFont(ofSize: 12)
+        addressBar.wantsLayer = true
+        addressBar.layer?.cornerRadius = 8
+        addressBar.cell?.usesSingleLineMode = true
 
         progress.translatesAutoresizingMaskIntoConstraints = false
         progress.isIndeterminate = false
         progress.minValue = 0; progress.maxValue = 1; progress.isHidden = true
-        bar.addSubview(progress)
+
+        header.addSubview(navRow)
+        header.addSubview(addressBar)
+        header.addSubview(progress)
 
         let side = sidebar.view
         side.translatesAutoresizingMaskIntoConstraints = false
         contentBox.translatesAutoresizingMaskIntoConstraints = false
+        contentBox.wantsLayer = true
+        contentBox.layer?.cornerRadius = 8
+        contentBox.layer?.masksToBounds = true
 
         let divider = NSBox()
         divider.boxType = .separator
         divider.translatesAutoresizingMaskIntoConstraints = false
 
-        content.addSubview(side); content.addSubview(divider)
-        content.addSubview(bar); content.addSubview(contentBox)
-        // `sidebar` is a stored property, so it is retained; NSWindowController
-        // has no addChild. Space switching in milestone D will make this a
-        // proper NSViewController containment hierarchy (spec §3).
+        content.addSubview(side); content.addSubview(divider); content.addSubview(contentBox)
 
-        sidebarWidth = side.widthAnchor.constraint(equalToConstant: 240)
+        sidebarWidth = side.widthAnchor.constraint(equalToConstant: 232)
         NSLayoutConstraint.activate([
-            side.topAnchor.constraint(equalTo: content.topAnchor, constant: 28),
+            side.topAnchor.constraint(equalTo: content.topAnchor),
             side.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             side.bottomAnchor.constraint(equalTo: content.bottomAnchor),
             sidebarWidth,
 
+            // Traffic lights sit over the sidebar; leave them room.
+            navRow.topAnchor.constraint(equalTo: header.topAnchor, constant: 22),
+            navRow.leadingAnchor.constraint(equalTo: header.leadingAnchor, constant: 8),
+            navRow.heightAnchor.constraint(equalToConstant: 22),
+
+            addressBar.topAnchor.constraint(equalTo: navRow.bottomAnchor, constant: 6),
+            addressBar.leadingAnchor.constraint(equalTo: header.leadingAnchor, constant: 10),
+            addressBar.trailingAnchor.constraint(equalTo: header.trailingAnchor, constant: -10),
+            addressBar.heightAnchor.constraint(equalToConstant: 26),
+
+            progress.leadingAnchor.constraint(equalTo: header.leadingAnchor, constant: 10),
+            progress.trailingAnchor.constraint(equalTo: header.trailingAnchor, constant: -10),
+            progress.topAnchor.constraint(equalTo: addressBar.bottomAnchor, constant: 2),
+            progress.heightAnchor.constraint(equalToConstant: 2),
+
             divider.leadingAnchor.constraint(equalTo: side.trailingAnchor),
-            divider.topAnchor.constraint(equalTo: content.topAnchor, constant: 28),
+            divider.topAnchor.constraint(equalTo: content.topAnchor),
             divider.bottomAnchor.constraint(equalTo: content.bottomAnchor),
             divider.widthAnchor.constraint(equalToConstant: 1),
 
-            bar.topAnchor.constraint(equalTo: content.topAnchor, constant: 28),
-            bar.leadingAnchor.constraint(equalTo: divider.trailingAnchor),
-            bar.trailingAnchor.constraint(equalTo: content.trailingAnchor),
-            bar.heightAnchor.constraint(equalToConstant: 40),
-
-            backButton.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 10),
-            backButton.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
-            backButton.widthAnchor.constraint(equalToConstant: 32),
-            forwardButton.leadingAnchor.constraint(equalTo: backButton.trailingAnchor, constant: 4),
-            forwardButton.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
-            forwardButton.widthAnchor.constraint(equalToConstant: 32),
-            reloadButton.leadingAnchor.constraint(equalTo: forwardButton.trailingAnchor, constant: 4),
-            reloadButton.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
-            reloadButton.widthAnchor.constraint(equalToConstant: 32),
-
-            addressBar.leadingAnchor.constraint(equalTo: reloadButton.trailingAnchor, constant: 8),
-            addressBar.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -12),
-            addressBar.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
-
-            progress.leadingAnchor.constraint(equalTo: bar.leadingAnchor),
-            progress.trailingAnchor.constraint(equalTo: bar.trailingAnchor),
-            progress.bottomAnchor.constraint(equalTo: bar.bottomAnchor),
-            progress.heightAnchor.constraint(equalToConstant: 2),
-
-            contentBox.topAnchor.constraint(equalTo: bar.bottomAnchor),
-            contentBox.leadingAnchor.constraint(equalTo: divider.trailingAnchor),
-            contentBox.trailingAnchor.constraint(equalTo: content.trailingAnchor),
-            contentBox.bottomAnchor.constraint(equalTo: content.bottomAnchor),
+            // Content fills everything right of the divider. No toolbar.
+            contentBox.topAnchor.constraint(equalTo: content.topAnchor, constant: 8),
+            contentBox.leadingAnchor.constraint(equalTo: divider.trailingAnchor, constant: 8),
+            contentBox.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -8),
+            contentBox.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -8),
         ])
     }
 

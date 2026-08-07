@@ -71,6 +71,40 @@ public struct SpaceModel: Sendable {
         return s
     }
 
+    /// spec §3 — spaces are user-named and user-iconed, as in Zen. The icon is
+    /// an SF Symbol name, not an image file: no asset pipeline, no theming, and
+    /// it renders correctly at every size and in both appearances.
+    public mutating func rename(_ id: String, to name: String) {
+        guard let i = spaces.firstIndex(where: { $0.id == id }) else { return }
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        spaces[i].name = trimmed
+        // A space with its own profile keeps the profile's name in step, so
+        // the two never drift apart in the UI.
+        if let pid = profiles[spaces[i].profileID]?.id,
+           spaces.filter({ $0.profileID == pid }).count == 1 {
+            profiles[pid]?.name = trimmed
+        }
+    }
+
+    public mutating func setIcon(_ id: String, to symbol: String?) {
+        guard let i = spaces.firstIndex(where: { $0.id == id }) else { return }
+        spaces[i].icon = symbol
+    }
+
+    public mutating func removeSpace(_ id: String) {
+        guard spaces.count > 1 else { return }   // never leave zero spaces
+        spaces.removeAll { $0.id == id }
+        if current == id { current = spaces.first?.id }
+    }
+
+    /// The icons offered when creating or editing a space. Deliberately a short
+    /// fixed set — this is not a customisation surface.
+    public static let iconChoices = [
+        "person", "briefcase", "book", "cart", "hammer", "paintbrush",
+        "gamecontroller", "heart", "leaf", "graduationcap", "airplane", "house",
+    ]
+
     public mutating func select(_ id: String) {
         guard spaces.contains(where: { $0.id == id }) else { return }
         current = id

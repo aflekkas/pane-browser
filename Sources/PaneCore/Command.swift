@@ -21,6 +21,11 @@ public enum Command: Equatable, Sendable {
     case selectTab(TabID)
     case reopenClosedTab
     case toggleSidebar
+    case selectSpace(String)
+    case newSpace(name: String)
+    case renameSpace(String, String)
+    case setSpaceIcon(String, String?)
+    case deleteSpace(String)
     /// spec §4 — force the discard sweep now rather than waiting for the timer.
     /// Exists so the benchmark and scenarios can exercise discard deterministically.
     case sweepDiscardable

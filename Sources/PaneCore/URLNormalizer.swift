@@ -5,7 +5,11 @@ import Foundation
 /// Pure logic, no AppKit, no WebKit — so it is testable under `swift test`.
 public enum URLNormalizer {
     /// A bare token is a search unless it looks like a host.
-    public static func resolve(_ raw: String, searchTemplate: String = "https://duckduckgo.com/?q=%@") -> URL? {
+    /// The home page and the search engine, in one place so they cannot drift.
+    public static let homeURL = URL(string: "https://www.google.com")!
+    public static let searchTemplate = "https://www.google.com/search?q=%@"
+
+    public static func resolve(_ raw: String, searchTemplate: String = URLNormalizer.searchTemplate) -> URL? {
         let s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !s.isEmpty else { return nil }
 

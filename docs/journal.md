@@ -208,3 +208,42 @@ either, so it is held for a decision rather than assumed.
 
 **Next session:** the discard-then-measure benchmark, which is the one piece of
 the memory claim still unproven.
+
+## 2026-08-07 (night) — Arc-style sidebar, spaces UI, app icon
+
+**What happened.** Restructured the sidebar to the Arc/Zen shape at Alex's
+request, using the reference screenshots he supplied.
+
+The substantive change is not spacing, it is structure: **nav controls and the
+address field moved INSIDE the sidebar**, so the content area has no chrome
+above it at all. That is what gives Arc its feel. Spaces moved to the bottom as
+a pill row, "+ New Tab" is the last row of the list, and the content view got
+rounded corners and an inset.
+
+Spaces are now editable the way Zen does it: right-click a space pill to rename,
+pick an SF Symbol icon, or delete. Creating a space prompts for the name rather
+than making "Space 3" and leaving the user to find a rename command. All of it
+persists in SQLite through the Store actor — `space` and `profile` tables, as
+spec §2 already defined.
+
+Icon set to Alex's artwork via a new `Scripts/make-icon.sh`.
+
+**The icon utility caught its own bug.** macOS icons are not edge-to-edge: the
+artwork sits inside a safe area with ~10% padding and a superellipse mask, and
+the OS does not add that. First attempt used a feather band of 0.92–1.0 on the
+superellipse, which visibly thinned the flat edges to ~207/255 alpha — a soft
+grey halo. The squircle boundary is d==1 and it *touches* the box at each edge
+midpoint, so the feather has to sit just outside it. Narrowed to 0.98–1.06;
+edges now 248, corners 0, centre 255.
+
+**Delete Space wording is deliberate.** The confirmation says logins and cookies
+are kept, because deleting a space releases the data store reference — it does
+not call `WKWebsiteDataStore.remove(forIdentifier:)`, which would delete the
+user's data. Spec §3 is explicit about that distinction and the UI copy has to
+match what the code actually does.
+
+Default search and home page set to Google.
+
+**Still open:** visual golden automation (see the previous entry), essentials
+still render as a placeholder glyph rather than favicons, and the `moon.zzz`
+discarded-tab indicator remains unspecced pending Alex's call.
