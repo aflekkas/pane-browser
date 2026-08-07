@@ -51,6 +51,8 @@ public final class SidebarController: NSViewController {
     private let newTabButton = NSButton()
     private let downloadsButton = NSButton()
     public var onShowDownloads: (() -> Void)?
+    /// Anchor for the downloads popover.
+    public var downloadsAnchor: NSView? { downloadsButton.isHidden ? newTabButton : downloadsButton }
 
     /// Shown only while something is downloading or recently finished — a
     /// permanent chrome affordance for an occasional action is clutter.

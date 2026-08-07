@@ -60,6 +60,7 @@ it merely compiles.
 - [x] Address field styling (rounded, subtle fill, placeholder copy)
 - [x] Download indicator in the sidebar rather than a menu item
 - [ ] Find bar styled rather than the raw `NSTextFinder` bar
+- [x] Downloads popover with per-item progress
 
 ## Method
 

@@ -56,6 +56,8 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
     private var sidebarWidth: NSLayoutConstraint!
     private var sweepTimer: Timer?
     public let downloads = DownloadManager()
+    private let downloadsPanel = DownloadsPanel()
+    private let downloadsPopover = NSPopover()
     private var findBar: NSTextFinder?
     /// spec §6 — crash counting per origin. Three in five minutes is a bad
     /// page, not a bad browser, and reloading into it forever is the failure
@@ -346,9 +348,23 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
         sidebar.onShowDownloads = { [weak self] in self?.showDownloadsPanel() }
         downloads.onChange = { [weak self] in
             guard let self else { return }
-            self.sidebar.setDownloadState(
-                active: self.downloads.items.filter { !$0.isFinished && $0.failure == nil }.count,
-                finished: self.downloads.items.filter(\.isFinished).count)
+            let active = self.downloads.items.filter { !$0.isFinished && $0.failure == nil }
+            self.sidebar.setDownloadState(active: active.count,
+                                          finished: self.downloads.items.filter(\.isFinished).count)
+            self.downloadsPanel.update(self.downloads.items)
+            // spec §6 — Dock tile progress. Cleared when nothing is in flight,
+            // so a stale badge never implies work that finished long ago.
+            let tile = NSApp.dockTile
+            if active.isEmpty {
+                tile.badgeLabel = nil
+            } else {
+                let done = active.reduce(Int64(0)) { $0 + $1.bytesWritten }
+                let total = active.reduce(Int64(0)) { $0 + max($1.totalBytes, 0) }
+                tile.badgeLabel = total > 0
+                    ? "\(Int(Double(done) / Double(total) * 100))%"
+                    : "\(active.count)"
+            }
+            tile.display()
         }
         persistSpaces()
     }
@@ -615,33 +631,17 @@ public final class BrowserWindowController: NSWindowController, NSTextFieldDeleg
     // the "3 of 17" counter is impossible with public API. AppKit's NSTextFinder
     // against WKWebView's NSTextFinderClient conformance gives the native find
     // bar instead. See docs/research/2026-08-07-boring-floor.md.
-    /// spec §6 — an NSPopover off the toolbar, AppKit not web content.
+    /// spec §6 — an NSPopover anchored to the sidebar's downloads button.
     @objc public func showDownloadsPanel() {
-        guard let window else { return }
-        let alert = NSAlert()
-        alert.messageText = "Downloads"
-        if downloads.items.isEmpty {
-            alert.informativeText = "Nothing downloaded yet."
-        } else {
-            alert.informativeText = downloads.items.reversed().map { item -> String in
-                if let f = item.failure { return "✗  \(item.filename) — \(f)" }
-                if item.isFinished {
-                    let q = item.destination.map { DownloadManager.hasQuarantine($0) ? " (quarantined)" : " (NOT quarantined)" } ?? ""
-                    return "✓  \(item.filename)\(q)"
-                }
-                let pct = item.totalBytes > 0
-                    ? Int(Double(item.bytesWritten) / Double(item.totalBytes) * 100) : 0
-                return "↓  \(item.filename) — \(pct)%"
-            }.joined(separator: "\n")
-        }
-        alert.addButton(withTitle: "Done")
-        if !downloads.items.isEmpty { alert.addButton(withTitle: "Show in Finder") }
-        alert.beginSheetModal(for: window) { [weak self] r in
-            guard r == .alertSecondButtonReturn,
-                  let last = self?.downloads.items.last?.destination else { return }
-            NSWorkspace.shared.activateFileViewerSelecting([last])
-        }
+        downloadsPanel.update(downloads.items)
+        downloadsPanel.onReveal = { NSWorkspace.shared.activateFileViewerSelecting([$0]) }
+        downloadsPopover.contentViewController = downloadsPanel
+        downloadsPopover.behavior = .transient
+        downloadsPopover.contentSize = NSSize(width: 320, height: 220)
+        guard let anchor = sidebar.downloadsAnchor else { return }
+        downloadsPopover.show(relativeTo: anchor.bounds, of: anchor, preferredEdge: .maxY)
     }
+
 
     @objc public func performFind() {
         guard let web = currentEngine?.webView else { return }

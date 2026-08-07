@@ -261,8 +261,8 @@ of X" note in `docs/api-notes/quarantine.md`.
       red/amber by severity with an "Advanced" chain disclosure
 - [x] Downloads indicator in the sidebar footer, appearing only when relevant
 - [x] Cross-space tab drag with the profile warning §5 requires
-- [ ] Downloads panel is still an `NSAlert` rather than an `NSPopover`; no
-      Dock-tile progress
+- [x] Downloads panel is an `NSPopover` off the sidebar button, with per-item
+      progress bars and Dock-tile percentage — §6's shape
 - [x] Per-space context submenu — §6's "what makes multi-space actually usable"
 - [x] Fixture server built; auth, download and untrusted-cert paths now have
       scenarios, with a `security.trust_all_certs` mutant proving the cert
