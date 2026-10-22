@@ -43,6 +43,45 @@ struct PasswordBridgeNavigationTests {
         #expect(valid.forwarded)
     }
 
+    @Test(arguments: ["pushState", "replaceState"])
+    func spaRouteThenCancelledNavigationRestoresFreshFocusAndFill(method: String) async throws {
+        let fixture = try await PasswordBridgeLoopbackFixture()
+        defer { fixture.stop() }
+        let harness = try PasswordBridgeWorldHarness()
+        defer { harness.close() }
+        try await harness.load(fixture.url())
+        let beforeRoute = try await harness.waitForContext()
+
+        // Move the surviving document to a new SPA route.
+        _ = try await harness.evaluatePage("history.\(method)({}, '', '/other'); true")
+        let routeURL = try fixture.url("/other")
+        try await harness.waitUntil("native SPA document URL") {
+            harness.page.currentPasswordContext()?.documentURL == routeURL
+        }
+        let routed = try await harness.waitForContext()
+        #expect(routed.documentToken == beforeRoute.documentToken)
+
+        // Capture a fill bound to the routed document, then hold and
+        // cancel a provisional navigation. The routed document survives;
+        // re-handshake must register it at the bumped generation, and the
+        // pending old fill must not write afterwards.
+        let staleFocus = try await harness.focusPassword()
+        try await harness.cancelHeldNavigation(on: fixture)
+        let restored = try await harness.waitForContext(afterGeneration: routed.generation)
+        #expect(restored.documentURL == routeURL)
+        #expect(restored.documentToken == routed.documentToken)
+        #expect(restored != routed)
+
+        try await harness.fill(focus: staleFocus, token: routed.documentToken)
+        let afterStale = try await harness.evaluatePage("document.getElementById('pw').value") as? String
+        #expect(afterStale == "")
+
+        let freshFocus = try await harness.focusPassword()
+        try await harness.fill(focus: freshFocus, token: restored.documentToken)
+        let filled = try await harness.evaluatePage("document.getElementById('pw').value") as? String
+        #expect(filled == "fixture-dummy-value")
+    }
+
     @Test func cancelledProvisionalNavigationRestoresRealFocusAndFill() async throws {
         let fixture = try await PasswordBridgeLoopbackFixture()
         defer { fixture.stop() }
