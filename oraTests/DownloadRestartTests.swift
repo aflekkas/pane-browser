@@ -22,6 +22,13 @@ struct DownloadRestartTests {
         ]))
         await profile.dataStore.httpCookieStore.setCookie(cookie)
         defer { profile.clearData(ofTypes: [.all]) }
+        let installed = await profile.dataStore.httpCookieStore.allCookies()
+        #expect(installed.contains { $0.name == "session" && $0.value == "persisted-owner" })
+        // Resolve the exact store used by recovery before retry, without
+        // registering a transfer session or starting any prior download.
+        let recoveredProfile = BrowserEngine.shared.makeProfile(identifier: owner, isPrivate: false)
+        let recoveredCookies = await recoveredProfile.dataStore.httpCookieStore.allCookies()
+        #expect(recoveredCookies.contains { $0.name == "session" && $0.value == "persisted-owner" })
         let store = try ModelConfiguration.createOraContainer(at: storeURL)
         let context = ModelContext(store)
         let manager = DownloadManager(modelContainer: store, modelContext: context)
@@ -34,6 +41,9 @@ struct DownloadRestartTests {
             .domain: "127.0.0.1", .path: "/", .name: "session", .value: "wrong-focused-session"
         ]))
         await focused.page.webView.configuration.websiteDataStore.httpCookieStore.setCookie(otherCookie)
+        let focusedCookies = await focused.page.webView.configuration.websiteDataStore.httpCookieStore.allCookies()
+        #expect(focusedCookies.contains { $0.name == "session" && $0.value == "wrong-focused-session" })
+        #expect(!focusedCookies.contains { $0.value == "persisted-owner" })
         let record = try #require(context.fetch(FetchDescriptor<Download>()).first { $0.id == recordID })
         #expect(record.resumeData == nil)
         #expect(manager.canRetryDownload(record))
@@ -81,5 +91,31 @@ struct DownloadRestartTests {
         context.insert(record)
         try context.save()
         return record.id
+    }
+}
+
+extension DownloadRestartTests {
+    @Test func recoveredFreshRetryOwnsAndCancelsNavigationAuthentication() async throws {
+        let fixture = try await DownloadFlowFixture()
+        defer { fixture.stop() }
+        let harness = try DownloadFlowHarness()
+        defer { harness.close() }
+        harness.window.makeKeyAndOrderFront(nil)
+        let owner = TabContainer(name: "Recovered auth owner")
+        harness.manager.modelContext.insert(owner)
+        let record = try Download(originalURL: fixture.url("/auth-large"), fileName: "auth.bin")
+        record.profileID = owner.id.uuidString
+        record.markCancelled()
+        harness.manager.modelContext.insert(record)
+        try harness.manager.modelContext.save()
+        harness.manager.retryDownload(record)
+        try await harness.wait("recovered navigation auth sheet") { harness.window.attachedSheet != nil }
+        let sheet = try #require(harness.window.attachedSheet)
+        #expect(record.status == .pending)
+        harness.manager.cancelDownload(record)
+        try await harness.wait("recovered auth cancelled") { sheet.sheetParent == nil && !sheet.isVisible }
+        #expect(record.status == .cancelled && harness.manager.canRetryDownload(record))
+        #expect(!fixture.requests.contains { $0.lowercased().contains("authorization:") })
+        #expect(record.destinationURL == nil)
     }
 }

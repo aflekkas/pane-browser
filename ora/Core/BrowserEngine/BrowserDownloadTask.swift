@@ -6,6 +6,9 @@ final class BrowserDownloadTask: NSObject, WKDownloadDelegate {
     let id = UUID()
     let isResumed: Bool
     var activity: BrowserDownloadActivity?
+    /// Recovered fresh requests use a separate top-level navigation context.
+    /// Keep that exact data-store owner alive until this task is released.
+    var sourceWebView: WKWebView?
     var originalURL: URL
     /// Page the download was initiated from, for quarantine provenance.
     var pageURL: URL?

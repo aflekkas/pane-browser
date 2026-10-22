@@ -22,6 +22,7 @@ final class BrowserDownloadSession: DownloadTransferSession {
     private let activity: BrowserDownloadActivity
     private weak var page: BrowserPage?
     private var pending: [UUID: UUID] = [:]
+    private var freshNavigations: [UUID: BrowserDownloadNavigation] = [:]
     private weak var retryWindow: NSWindow?
     private var restoredScope: CertificateExceptionScope?
     private let authenticationSession = BrowserAuthenticationSession()
@@ -101,12 +102,30 @@ final class BrowserDownloadSession: DownloadTransferSession {
                 return
             }
             pending.removeValue(forKey: record.id)
+            task.sourceWebView = freshNavigations.removeValue(forKey: record.id)?.webView
             configure(task)
             activity.end(pendingID)
             completion(task)
         }
         if let resumeData {
             webView.resumeDownload(fromResumeData: resumeData, completionHandler: received)
+        } else if let restoredScope {
+            let navigation = BrowserDownloadNavigation(
+                dataStore: webView.configuration.websiteDataStore, scope: restoredScope, window: retryWindow
+            )
+            freshNavigations[record.id] = navigation
+            navigation.start(URLRequest(url: record.originalURL)) { [self] download in
+                if let download {
+                    received(download)
+                } else {
+                    if pending[record.id] == pendingID {
+                        freshNavigations.removeValue(forKey: record.id)
+                        pending.removeValue(forKey: record.id)
+                        activity.end(pendingID)
+                    }
+                    completion(nil)
+                }
+            }
         } else {
             webView.startDownload(using: URLRequest(url: record.originalURL), completionHandler: received)
         }
@@ -116,5 +135,6 @@ final class BrowserDownloadSession: DownloadTransferSession {
         if let pendingID = pending.removeValue(forKey: recordID) {
             activity.end(pendingID)
         }
+        freshNavigations.removeValue(forKey: recordID)?.cancel()
     }
 }
