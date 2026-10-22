@@ -28,6 +28,10 @@ struct LifecycleRestoreOwnershipTests {
         let harness = try LifecycleRepairHarness(page: #require(tab.browserPage))
         defer { harness.close() }
         try await harness.loaded(fixture.url("/b"))
+        // Navigation completion precedes the restored viewport's rendered-frame
+        // acknowledgement. Make rendering possible and await that bounded contract.
+        harness.show()
+        try await LifecycleRepairHarness.waitUntil { !harness.page.hasPendingLifecycleRestore }
         #expect(!harness.page.hasPendingLifecycleRestore)
         #expect(harness.page.canGoBack)
         tab.goBack()
