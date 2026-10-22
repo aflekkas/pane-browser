@@ -72,4 +72,13 @@ final class BrowserEngine {
     ) -> BrowserPage {
         BrowserPage(profile: profile, configuration: configuration, delegate: delegate)
     }
+
+    /// Releases the cached profile reference for a container whose tabs are
+    /// all discarded. Never deletes website data; the next page for the
+    /// container recreates the profile on demand.
+    func releaseProfile(identifier: UUID) {
+        profileCacheLock.lock()
+        defer { profileCacheLock.unlock() }
+        profileCache[ProfileKey(identifier: identifier, isPrivate: false)] = nil
+    }
 }

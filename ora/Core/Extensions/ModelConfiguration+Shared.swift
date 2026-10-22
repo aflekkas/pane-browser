@@ -31,7 +31,7 @@ extension ModelConfiguration {
         } else {
             return ModelConfiguration(
                 "OraData",
-                schema: Schema([TabContainer.self, History.self, Download.self]),
+                schema: Schema([TabContainer.self, History.self, Download.self, TabSessionSnapshot.self]),
                 url: oraStoreURL
             )
         }
@@ -42,7 +42,7 @@ extension ModelConfiguration {
     static func oraDatabase(at storeURL: URL) -> ModelConfiguration {
         ModelConfiguration(
             "OraData",
-            schema: Schema([TabContainer.self, History.self, Download.self]),
+            schema: Schema([TabContainer.self, History.self, Download.self, TabSessionSnapshot.self]),
             url: storeURL
         )
     }
@@ -53,7 +53,7 @@ extension ModelConfiguration {
             try prepareStoreDirectory(for: oraStoreURL)
         }
         return try ModelContainer(
-            for: TabContainer.self, History.self, Download.self,
+            for: TabContainer.self, History.self, Download.self, TabSessionSnapshot.self,
             configurations: oraDatabase(isPrivate: isPrivate)
         )
     }
@@ -64,7 +64,7 @@ extension ModelConfiguration {
     static func createOraContainer(at storeURL: URL) throws -> ModelContainer {
         try prepareStoreDirectory(for: storeURL)
         return try ModelContainer(
-            for: TabContainer.self, History.self, Download.self,
+            for: TabContainer.self, History.self, Download.self, TabSessionSnapshot.self,
             configurations: oraDatabase(at: storeURL)
         )
     }

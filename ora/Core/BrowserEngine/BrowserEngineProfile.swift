@@ -3,6 +3,8 @@ import Foundation
 
 final class BrowserEngineProfile {
     let identifier: UUID
+    /// Distinguishes separate nonpersistent stores even within the same Space.
+    let privateSessionID = UUID()
     let isPrivate: Bool
     let dataStore: WKWebsiteDataStore
 

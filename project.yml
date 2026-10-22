@@ -61,6 +61,7 @@ targets:
       properties:
         NSCameraUsageDescription: "Allows websites to use the camera, for example during video calls."
         NSMicrophoneUsageDescription: "Allows websites to use the microphone, for example during calls or dictation."
+        LSFileQuarantineEnabled: true
         # Pane: no update feed yet. Add SUFeedURL + our own SUPublicEDKey when we ship updates.
         SUEnableAutomaticChecks: NO
         SUEnableInstallerLauncherService: YES

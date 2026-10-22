@@ -8,6 +8,8 @@ final class TabBrowserPageDelegate: BrowserPageDelegate {
 
     private var progressResetWorkItem: DispatchWorkItem?
 
+    deinit { progressResetWorkItem?.cancel() }
+
     func browserPage(
         _ page: BrowserPage,
         decidePolicyFor navigationAction: BrowserNavigationAction
@@ -94,8 +96,9 @@ final class TabBrowserPageDelegate: BrowserPageDelegate {
                 tab.updateHeaderColor()
             }
 
-            let workItem = DispatchWorkItem { [weak tab] in
-                tab?.loadingProgress = 0
+            let workItem = DispatchWorkItem { [weak tab, weak page] in
+                guard let tab, let page, tab.browserPage === page else { return }
+                tab.loadingProgress = 0
             }
             progressResetWorkItem = workItem
             DispatchQueue.main.asyncAfter(deadline: .now() + 3.0, execute: workItem)
@@ -196,8 +199,57 @@ final class TabBrowserPageDelegate: BrowserPageDelegate {
         }
     }
 
+    func browserPage(
+        _ page: BrowserPage,
+        respondTo challenge: URLAuthenticationChallenge,
+        scope: CertificateExceptionScope,
+        completion: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
+    ) {
+        let once = OnceCompletion<(URLSession.AuthChallengeDisposition, URLCredential?)> { result in
+            completion(result.0, result.1)
+        }
+        MainActor.assumeIsolated {
+            guard let tab, tab.browserPage === page else {
+                once.call((.cancelAuthenticationChallenge, nil))
+                return
+            }
+            // Create the owner synchronously: a navigation before Task starts
+            // must still be able to retire this exact challenge.
+            let operation = page.authenticationSession.begin(window: page.windowForAuthSheets)
+            Task { @MainActor [weak tab, weak page] in
+                guard let page, operation.isActive else {
+                    once.call((.cancelAuthenticationChallenge, nil))
+                    return
+                }
+                let result = await BrowserAuthHandler.respond(
+                    to: challenge,
+                    window: page.windowForAuthSheets,
+                    scope: scope,
+                    operation: operation,
+                    dismissCertificateDecision: { [weak tab] id in
+                        tab?.resolveCertificateChallenge(id: id, allowed: false)
+                    },
+                    presentCertificateDecision: { [weak tab, weak page] evaluation, decide in
+                        guard let tab, let page, tab.browserPage === page,
+                              page.windowForAuthSheets != nil, operation.isActive
+                        else {
+                            decide(false)
+                            return
+                        }
+                        tab.presentCertificateChallenge(evaluation, decide: decide)
+                    }
+                )
+                once.call(operation.isActive ? result : (.cancelAuthenticationChallenge, nil))
+                operation.finish()
+            }
+        }
+    }
+
     func browserPage(_ page: BrowserPage, didStartDownload download: BrowserDownloadTask) {
         MainActor.assumeIsolated {
+            let session = BrowserDownloadSession(page: page)
+            session.configure(download)
+            tab?.downloadManager?.registerDownloadSession(session)
             tab?.downloadManager?.handleDownload(download)
 
             guard page.isDownloadNavigation, let tab else { return }
@@ -218,12 +270,16 @@ final class TabBrowserPageDelegate: BrowserPageDelegate {
                 rect: CGRect(x: 0, y: 0, width: page.contentView.bounds.width, height: 24),
                 afterScreenUpdates: false
             )
-        ) { [weak self] image, error in
-            guard let self, let image, error == nil else { return }
-            guard let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return }
+        ) { [weak self, weak page] image, error in
+            guard let self, let image, error == nil, let cgImage = image.cgImage(
+                forProposedRect: nil,
+                context: nil,
+                hints: nil
+            ) else { return }
 
             let color = self.extractDominantColor(from: cgImage) ?? .black
             DispatchQueue.main.async {
+                guard let page, self.tab?.browserPage === page else { return }
                 self.tab?.updateBackgroundColor(Color(nsColor: color))
                 self.tab?.colorUpdated = true
             }

@@ -74,6 +74,8 @@ class TabManager: ObservableObject {
 
         self.modelContext.undoManager = UndoManager()
         initializeActiveContainerAndTab()
+        markRestoredTabsDiscarded()
+        TabLifecycleQuitCoordinator.shared.register(self)
 
         // Start automatic cleanup timer (every minute)
         startCleanupTimer()
@@ -111,33 +113,46 @@ class TabManager: ObservableObject {
     }
 
     func togglePinTab(_ tab: Tab) {
-        if tab.type == .pinned {
-            tab.type = .normal
-            tab.savedURL = nil
-        } else {
-            tab.type = .pinned
-            tab.savedURL = tab.url
-        }
-
+        tab.setUserSection(tab.type == .pinned ? .normal : .pinned)
         try? modelContext.save()
     }
 
     func toggleFavTab(_ tab: Tab) {
-        if tab.type == .fav {
-            tab.type = .normal
-            tab.savedURL = nil
-        } else {
-            tab.type = .fav
-            tab.savedURL = tab.url
-        }
-
+        tab.setUserSection(tab.type == .fav ? .normal : .fav)
         try? modelContext.save()
     }
 
     // MARK: - Container Public API's
 
     func moveTabToContainer(_ tab: Tab, toContainer: TabContainer) {
+        guard tab.container.id != toContainer.id else { return }
+        // Move the URL only. Never retain the source data store, history blob,
+        // activity probe, password delegate or private session in the new profile.
+        let wasLive = tab.browserPage != nil
+        let movedURL = tab.browserPage?.currentURL ?? tab.url
+        tab.finishLifecycleDiscard()
+        tab.deletePersistedInteractionState()
+        mediaController.removeSession(for: tab.id)
         tab.container = toContainer
+        tab.url = movedURL
+        tab.urlString = movedURL.absoluteString
+        if tab.type != .normal {
+            tab.savedURL = movedURL
+        }
+        if isActive(tab) {
+            activeContainer = toContainer
+        }
+        if wasLive {
+            tab.restoreTransientState(
+                historyManager: tab.historyManager ?? HistoryManager(
+                    modelContainer: modelContainer, modelContext: modelContext
+                ),
+                downloadManager: tab.downloadManager ?? DownloadManager(
+                    modelContainer: modelContainer, modelContext: modelContext
+                ),
+                tabManager: self, isPrivate: tab.isPrivate
+            )
+        }
         try? modelContext.save()
     }
 
@@ -299,48 +314,46 @@ class TabManager: ObservableObject {
         isPrivate: Bool,
         loadSilently: Bool = false
     ) -> Tab? {
-        if let container = activeContainer {
-            if let host = url.host {
-                let faviconURL = FaviconService.shared.faviconURL(for: host)
+        if let container = activeContainer, let host = url.host {
+            let faviconURL = FaviconService.shared.faviconURL(for: host)
 
-                let cleanHost = host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
+            let cleanHost = host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
 
-                let newTab = Tab(
-                    url: url,
-                    title: cleanHost,
-                    favicon: faviconURL,
-                    container: container,
-                    type: .normal,
-                    isPlayingMedia: false,
-                    order: container.tabs.count + 1,
+            let newTab = Tab(
+                url: url,
+                title: cleanHost,
+                favicon: faviconURL,
+                container: container,
+                type: .normal,
+                isPlayingMedia: false,
+                order: container.tabs.count + 1,
+                historyManager: historyManager,
+                downloadManager: downloadManager,
+                tabManager: self,
+                isPrivate: isPrivate
+            )
+            modelContext.insert(newTab)
+            container.tabs.append(newTab)
+
+            if focusAfterOpening {
+                activateTab(newTab)
+            }
+            if focusAfterOpening || loadSilently {
+                // Initialize the WebView for the new active tab
+                newTab.restoreTransientState(
                     historyManager: historyManager,
-                    downloadManager: downloadManager,
+                    downloadManager: downloadManager ?? DownloadManager(
+                        modelContainer: modelContainer,
+                        modelContext: modelContext
+                    ),
                     tabManager: self,
                     isPrivate: isPrivate
                 )
-                modelContext.insert(newTab)
-                container.tabs.append(newTab)
-
-                if focusAfterOpening {
-                    activateTab(newTab)
-                }
-                if focusAfterOpening || loadSilently {
-                    // Initialize the WebView for the new active tab
-                    newTab.restoreTransientState(
-                        historyManager: historyManager,
-                        downloadManager: downloadManager ?? DownloadManager(
-                            modelContainer: modelContainer,
-                            modelContext: modelContext
-                        ),
-                        tabManager: self,
-                        isPrivate: isPrivate
-                    )
-                }
-
-                container.lastAccessedAt = Date()
-                try? modelContext.save()
-                return newTab
             }
+
+            container.lastAccessedAt = Date()
+            try? modelContext.save()
+            return newTab
         }
         return nil
     }
@@ -388,19 +401,21 @@ class TabManager: ObservableObject {
         if shouldTrackForRestore, tab.type == .normal {
             trackRecentlyClosedTab(tab)
         }
-        tab.stopMedia { [weak self] in
-            DispatchQueue.main.async {
-                guard let self else { return }
-                if tab.type == .normal {
-                    self.modelContext.delete(tab)
-                } else {
-                    tab.isWebViewReady = false
-                    tab.destroyWebView()
-                }
-                self.mediaController.removeSession(for: tab.id)
-                try? self.modelContext.save()
-            }
+        // Make the row reopenable synchronously. Media callbacks must not
+        // discard a replacement page selected while the old page shuts down.
+        let closingPage = tab.browserPage
+        if tab.type != .normal {
+            tab.captureInteractionState()
         }
+        tab.finishLifecycleDiscard()
+        tab.maybeIsActive = false
+        if tab.type == .normal {
+            tab.deletePersistedInteractionState()
+            modelContext.delete(tab)
+        }
+        closingPage?.closeMediaPresentations {}
+        mediaController.removeSession(for: tab.id)
+        try? modelContext.save()
         self.activeTab?.maybeIsActive = true
     }
 
@@ -462,7 +477,7 @@ class TabManager: ObservableObject {
         tab.container.lastAccessedAt = Date()
 
         // Lazy load WebView if not ready
-        if !tab.isWebViewReady {
+        if tab.browserPage == nil || !tab.isWebViewReady {
             tab.restoreTransientState(
                 historyManager: tab.historyManager ?? HistoryManager(
                     modelContainer: modelContainer,
@@ -480,20 +495,76 @@ class TabManager: ObservableObject {
         try? modelContext.save()
     }
 
-    /// Clean up old tabs that haven't been accessed recently to preserve memory
+    /// Two-stage idle unload (Pane spec §4, ADR 0001 — no frozen tier).
+    /// Stage 1 checkpoints interaction state at Pane's per-kind thresholds
+    /// while the page stays live; stage 2 discards (capture + deallocate)
+    /// only past the user's own `tabAliveTimeout` and only after a live
+    /// activity probe confirms no audio, MediaSession, or unsaved form
+    /// work. `removeOldTabs`/`autoClearContainerTabs` below keep their
+    /// separate user-configured *deletion* semantics.
     func cleanupOldTabs() {
-        let timeout = SettingsStore.shared.tabAliveTimeout
-        // Skip cleanup if set to "Never" (365 days)
-        guard timeout < 365 * 24 * 60 * 60 else { return }
-
+        let policy = TabLifecyclePolicy(userUnloadDelay: SettingsStore.shared.tabAliveTimeout)
+        let now = Date()
         let allContainers = fetchContainers()
         for container in allContainers {
             for tab in container.tabs {
-                if !tab.isAlive, tab.isWebViewReady, tab.id != activeTab?.id, !tab.isPlayingMedia, tab.type == .normal {
-                    tab.destroyWebView()
+                guard tab.browserPage != nil else { continue }
+                let facts = tab.lifecycleFacts(isActive: tab.id == activeTab?.id)
+                if policy.shouldProbe(facts, at: now) {
+                    tab.probeLifecycleForDiscard(policy: policy)
+                    continue
+                }
+                switch policy.stage(for: facts, at: now) {
+                case .checkpoint:
+                    tab.captureInteractionState()
+                case .discard:
+                    tab.probeLifecycleForDiscard(policy: policy)
+                case nil:
+                    break
                 }
             }
         }
+        // Release cached profiles for inactive containers whose tabs are
+        // all discarded (reference only — website data is never deleted).
+        for container in allContainers where container.id != activeContainer?.id {
+            let allDiscarded = container.tabs.allSatisfy { $0.isDiscarded || $0.browserPage == nil }
+            if TabLifecycleProfileTeardown.isEligible(
+                containerLastAccessedAt: container.lastAccessedAt,
+                isCurrentContainer: false,
+                allTabsDiscarded: allDiscarded,
+                at: now
+            ) {
+                BrowserEngine.shared.releaseProfile(identifier: container.id)
+            }
+        }
+    }
+
+    /// Session-restore bookkeeping: at launch every persisted tab starts
+    /// discarded (rows, not renderers); only materialisation clears it.
+    func markRestoredTabsDiscarded() {
+        for container in fetchContainers() {
+            for tab in container.tabs where tab.browserPage == nil {
+                tab.isDiscarded = true
+            }
+        }
+        try? modelContext.save()
+    }
+
+    /// Captures every live tab's state. The quit hook that calls this is
+    /// an integration step (see `parallel-ports/tabs-integration.md`).
+    @discardableResult
+    func captureAllLiveSnapshots() -> Bool {
+        var succeeded = true
+        for container in fetchContainers() {
+            for tab in container.tabs where tab.browserPage != nil && !tab.isPrivate {
+                // Private windows have no session to persist at application quit.
+                if tab.captureLifecycleCheckpoint() == .saveFailed {
+                    succeeded = false
+                }
+            }
+        }
+        do { try modelContext.save() } catch { succeeded = false }
+        return succeeded
     }
 
     /// Completely remove old normal tabs that haven't been accessed for a long time
@@ -608,8 +679,7 @@ class TabManager: ObservableObject {
 
     func duplicateTab(_ tab: Tab) {
         // Create a new tab using the existing openTab method
-        guard let historyManager = tab.historyManager else { return }
-        guard let newTab = openTab(
+        guard let historyManager = tab.historyManager, let newTab = openTab(
             url: tab.url,
             historyManager: historyManager,
             downloadManager: tab.downloadManager,
@@ -668,6 +738,7 @@ private extension TabManager {
 
     func deleteContainerContents(_ container: TabContainer, containerId: UUID) {
         for tab in Array(container.tabs) {
+            tab.deletePersistedInteractionState()
             if tab.isWebViewReady {
                 tab.destroyWebView()
             }
