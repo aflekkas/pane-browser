@@ -111,6 +111,20 @@ struct OraRoot: View {
             .enableInjection()
             .onAppear {
                 downloadManager.toastManager = toastManager
+
+                // URLs that arrived at launch, before this window (and its
+                // .openURL observer below) existed.
+                if let appDelegate = NSApp.delegate as? AppDelegate {
+                    for url in appDelegate.consumePendingOpenURLs() {
+                        tabManager.openTab(
+                            url: url,
+                            historyManager: historyManager,
+                            downloadManager: downloadManager,
+                            focusAfterOpening: true,
+                            isPrivate: privacyMode.isPrivate
+                        )
+                    }
+                }
                 Task {
                     let containerIDs = await MainActor.run {
                         (try? tabContext.fetch(FetchDescriptor<TabContainer>()))?.map(\.id) ?? []

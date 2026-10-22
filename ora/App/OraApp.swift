@@ -40,13 +40,47 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func handleIncomingURLs(_ urls: [URL]) {
-        let window = getWindow()!
+        // Launch-time URLs can arrive before any window exists and before
+        // OraRoot registers its .openURL observer in onAppear. Posting the
+        // notification then loses the URL (and getWindow() may return a
+        // different window than the observer's target, which also drops
+        // it). Queue instead; OraRoot drains the queue when it appears.
+        guard !NSApp.windows.isEmpty, let window = getWindow() else {
+            pendingOpenURLs.enqueue(urls)
+            return
+        }
         for url in urls {
             let userInfo: [AnyHashable: Any] = ["url": url]
             DispatchQueue.main.async {
                 NotificationCenter.default.post(name: .openURL, object: window, userInfo: userInfo)
             }
         }
+    }
+
+    /// URLs received before the first window appeared. Drained once by
+    /// OraRoot on appear; live URLs keep the window-targeted path above.
+    var pendingOpenURLs = OpenURLQueue()
+
+    func consumePendingOpenURLs() -> [URL] {
+        pendingOpenURLs.drain()
+    }
+}
+
+/// FIFO of external URLs waiting for the first browser window.
+struct OpenURLQueue {
+    private var urls: [URL] = []
+
+    var isEmpty: Bool {
+        urls.isEmpty
+    }
+
+    mutating func enqueue(_ newURLs: [URL]) {
+        urls.append(contentsOf: newURLs)
+    }
+
+    mutating func drain() -> [URL] {
+        defer { urls = [] }
+        return urls
     }
 }
 
