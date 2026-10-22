@@ -134,6 +134,12 @@ final class CertificateExceptions: @unchecked Sendable {
         return allowed.count
     }
 
+    var isEmpty: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return allowed.isEmpty
+    }
+
     // MARK: - Fingerprint + evaluation
 
     static func sha256Hex(_ data: Data) -> String {
