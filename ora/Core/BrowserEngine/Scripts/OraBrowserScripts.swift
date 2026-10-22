@@ -17,13 +17,19 @@ enum OraBrowserScripts {
             )
         ]
 
+        // Audited per script: only the password manager is privileged (it
+        // receives credentials and a native handler), so only it moves to
+        // the isolated world. The bridge/navigation/media scripts above stay
+        // in the page world deliberately — they expose page-facing globals
+        // (`__oraBridge`, `__oraMedia`, PiP) that page interaction needs.
         if let passwordManagerScript = loadResourceScript(named: "password-manager") {
             scripts.append(
                 BrowserUserScript(
                     name: "ora-password-manager",
                     source: passwordManagerScript,
                     injectionTime: .atDocumentEnd,
-                    forMainFrameOnly: true
+                    forMainFrameOnly: true,
+                    contentWorld: PasswordBridge.contentWorld
                 )
             )
         }

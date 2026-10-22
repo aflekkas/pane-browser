@@ -7,6 +7,7 @@ final class BrowserPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
 
     private let webView: WKWebView
     private let messageNames: [String]
+    private let isolatedMessageNames: Set<String>
     private var originalURL: URL?
     private(set) var lastCommittedURL: URL?
     private(set) var isDownloadNavigation = false
@@ -50,19 +51,25 @@ final class BrowserPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
         let contentController = WKUserContentController()
         webConfiguration.userContentController = contentController
         messageNames = configuration.scriptMessageNames
+        isolatedMessageNames = configuration.isolatedScriptMessageNames
         webView = WKWebView(frame: .zero, configuration: webConfiguration)
         self.delegate = delegate
 
         super.init()
 
         for messageName in configuration.scriptMessageNames {
-            contentController.add(self, name: messageName)
+            if isolatedMessageNames.contains(messageName) {
+                contentController.add(self, contentWorld: PasswordBridge.world, name: messageName)
+            } else {
+                contentController.add(self, name: messageName)
+            }
         }
         for script in configuration.userScripts {
             let userScript = WKUserScript(
                 source: script.source,
                 injectionTime: mapInjectionTime(script.injectionTime),
-                forMainFrameOnly: script.forMainFrameOnly
+                forMainFrameOnly: script.forMainFrameOnly,
+                in: script.contentWorld.wkContentWorld
             )
             contentController.addUserScript(userScript)
         }
@@ -155,6 +162,14 @@ final class BrowserPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
         webView.evaluateJavaScript(script, completionHandler: completion)
     }
 
+    /// Evaluate in the isolated password-bridge world. This is the only path
+    /// allowed to touch `window.__oraPasswordManager`; page-world evaluation
+    /// of that global would silently fail (and must never be re-pointed at
+    /// the page world, which would hand fill to arbitrary page script).
+    func evaluatePasswordJavaScript(_ script: String, completion: ((Any?, Error?) -> Void)? = nil) {
+        webView.evaluateJavaScript(script, in: nil, in: PasswordBridge.world, completionHandler: completion)
+    }
+
     func takeSnapshot(
         configuration: BrowserSnapshotConfiguration,
         completion: @escaping (NSImage?, Error?) -> Void
@@ -178,7 +193,11 @@ final class BrowserPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
         let controller = webView.configuration.userContentController
         controller.removeAllUserScripts()
         for messageName in messageNames {
-            controller.removeScriptMessageHandler(forName: messageName)
+            if isolatedMessageNames.contains(messageName) {
+                controller.removeScriptMessageHandler(forName: messageName, contentWorld: PasswordBridge.world)
+            } else {
+                controller.removeScriptMessageHandler(forName: messageName)
+            }
         }
         webView.removeFromSuperview()
     }
@@ -234,9 +253,29 @@ final class BrowserPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
     }
 
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        let frameURL = message.frameInfo.request.url
+        if isolatedMessageNames.contains(message.name) {
+            // Privileged bridge: validate against WebKit's own frame facts,
+            // never the JS payload. Drops subframe, cross-origin, and stale
+            // (pre-navigation) messages before any delegate sees them.
+            guard PasswordBridge.isValidMessage(
+                isMainFrame: message.frameInfo.isMainFrame,
+                frameURL: frameURL,
+                pageURL: webView.url,
+                committedURL: lastCommittedURL
+            ) else {
+                return
+            }
+        }
         delegate?.browserPage(
             self,
-            didReceiveScriptMessage: BrowserScriptMessage(name: message.name, body: message.body)
+            didReceiveScriptMessage: BrowserScriptMessage(
+                name: message.name,
+                body: message.body,
+                isMainFrame: message.frameInfo.isMainFrame,
+                frameURL: frameURL,
+                pageURL: webView.url
+            )
         )
     }
 

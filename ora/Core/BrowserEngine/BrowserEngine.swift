@@ -10,6 +10,9 @@ struct BrowserPageConfiguration {
     let allowsBackForwardNavigationGestures: Bool
     let mediaPlaybackRequiresUserAction: Bool
     let scriptMessageNames: [String]
+    /// Handlers registered only in an isolated content world (see
+    /// `PasswordBridge`). Page script cannot reach these.
+    let isolatedScriptMessageNames: Set<String>
     let userScripts: [BrowserUserScript]
     let privacySettings: SpacePrivacySettings
 
@@ -27,6 +30,7 @@ struct BrowserPageConfiguration {
             allowsBackForwardNavigationGestures: true,
             mediaPlaybackRequiresUserAction: false,
             scriptMessageNames: ["listener", "linkHover", "mediaEvent", "passwordManager"],
+            isolatedScriptMessageNames: [PasswordBridge.handlerName],
             userScripts: userScripts,
             privacySettings: privacySettings
         )

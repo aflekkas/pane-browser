@@ -380,6 +380,11 @@ class Tab: ObservableObject, Identifiable {
         browserPage?.evaluateJavaScript(script, completion: completion)
     }
 
+    /// Password-bridge evaluation only; runs in the isolated content world.
+    func evaluatePasswordJavaScript(_ script: String, completion: ((Any?, Error?) -> Void)? = nil) {
+        browserPage?.evaluatePasswordJavaScript(script, completion: completion)
+    }
+
     func takeSnapshot(
         configuration: BrowserSnapshotConfiguration,
         completion: @escaping (NSImage?, Error?) -> Void

@@ -150,6 +150,19 @@ final class PasswordAutofillCoordinator {
             return
         }
 
+        // The payload's hostname is page-supplied and untrusted. It must
+        // match the host WebKit natively reports for the page; a mismatch
+        // means a forged or stale (pre-navigation) message — drop it whole.
+        let payloadHostname = message.focus?.hostname ?? message.submit?.hostname
+        if let payloadHostname {
+            guard let pageURL,
+                  let nativeHost = PasswordManagerService.normalizedHost(from: pageURL),
+                  payloadHostname.lowercased() == nativeHost
+            else {
+                return
+            }
+        }
+
         switch message.type {
         case "focus":
             dismissWorkItem?.cancel()
@@ -210,6 +223,13 @@ final class PasswordAutofillCoordinator {
             }
 
             await MainActor.run {
+                // Re-validate after the async auth prompt: if the tab
+                // navigated away from the overlay's origin, the credential
+                // must not follow it.
+                guard self.isFillContextValid(for: overlay) else {
+                    self.clearAutofillState()
+                    return
+                }
                 let request = PasswordFillRequest(
                     usernameFieldID: overlay.focus.usernameFieldID,
                     passwordFieldIDs: overlay.focus.passwordFieldIDs,
@@ -227,6 +247,10 @@ final class PasswordAutofillCoordinator {
     }
 
     func fillGeneratedPassword(for overlay: PasswordAutofillOverlayState) {
+        guard isFillContextValid(for: overlay) else {
+            clearAutofillState()
+            return
+        }
         guard let generatedPassword = overlay.generatedPassword else {
             return
         }
@@ -249,6 +273,10 @@ final class PasswordAutofillCoordinator {
     }
 
     func fillEmailSuggestion(_ suggestion: PasswordEmailSuggestion, for overlay: PasswordAutofillOverlayState) {
+        guard isFillContextValid(for: overlay) else {
+            clearAutofillState()
+            return
+        }
         guard overlay.focus.fieldKind == .email else {
             return
         }
@@ -504,7 +532,14 @@ final class PasswordAutofillCoordinator {
             window.__oraPasswordManager.\(scriptMethod)(\(payloadString));
         }
         """
-        tab?.evaluateJavaScript(script)
+        tab?.evaluatePasswordJavaScript(script)
+    }
+
+    private func isFillContextValid(for overlay: PasswordAutofillOverlayState) -> Bool {
+        PasswordBridge.isFillContextValid(
+            currentURL: tab?.browserPage?.currentURL,
+            overlayHostname: overlay.focus.hostname
+        )
     }
 
     private func setOverlayKeyboardActive(_ isActive: Bool) {
