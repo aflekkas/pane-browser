@@ -196,8 +196,50 @@ final class TabBrowserPageDelegate: BrowserPageDelegate {
         }
     }
 
+    func browserPage(
+        _ page: BrowserPage,
+        respondTo challenge: URLAuthenticationChallenge,
+        scope: CertificateExceptionScope,
+        completion: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
+    ) {
+        let once = OnceCompletion<(URLSession.AuthChallengeDisposition, URLCredential?)> { result in
+            completion(result.0, result.1)
+        }
+        Task { @MainActor [weak tab, weak page] in
+            let result = await BrowserAuthHandler.respond(
+                to: challenge,
+                window: page?.windowForAuthSheets,
+                scope: scope,
+                presentCertificateDecision: { evaluation, decide in
+                    tab?.presentCertificateChallenge(evaluation, decide: decide)
+                }
+            )
+            once.call(result)
+        }
+    }
+
     func browserPage(_ page: BrowserPage, didStartDownload download: BrowserDownloadTask) {
         MainActor.assumeIsolated {
+            download.onAuthChallenge = { [weak tab, weak page] challenge in
+                await BrowserAuthHandler.respond(
+                    to: challenge,
+                    window: page?.windowForAuthSheets,
+                    scope: page?.certificateExceptionScope ?? .session,
+                    presentCertificateDecision: { evaluation, decide in
+                        tab?.presentCertificateChallenge(evaluation, decide: decide)
+                    }
+                )
+            }
+            if let downloadManager = tab?.downloadManager, downloadManager.resumeTaskProvider == nil {
+                downloadManager.resumeTaskProvider = { [weak tab, weak page] record in
+                    guard let resumeData = record.resumeData else { return nil }
+                    page?.resumeDownload(fromResumeData: resumeData) { task in
+                        guard let task else { return }
+                        tab?.downloadManager?.handleResumedDownload(task, for: record)
+                    }
+                    return nil
+                }
+            }
             tab?.downloadManager?.handleDownload(download)
 
             guard page.isDownloadNavigation, let tab else { return }

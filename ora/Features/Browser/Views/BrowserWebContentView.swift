@@ -49,7 +49,14 @@ struct BrowserWebContentView: View {
     @ViewBuilder
     private var webContent: some View {
         if tab.isWebViewReady {
-            if tab.hasNavigationError, let error = tab.navigationError {
+            if let challenge = tab.certificateChallenge {
+                CertificateInterstitialView(
+                    evaluation: challenge,
+                    onGoBack: { tab.resolveCertificateChallenge(allowed: false) },
+                    onContinue: { tab.resolveCertificateChallenge(allowed: true) }
+                )
+                .id(tab.id)
+            } else if tab.hasNavigationError, let error = tab.navigationError {
                 StatusPageView(
                     error: error,
                     failedURL: tab.failedURL,

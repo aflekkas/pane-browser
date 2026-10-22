@@ -20,6 +20,18 @@ class Download: ObservableObject, Identifiable {
     var status: DownloadStatus
     var progress: Double
     var destinationURL: URL?
+    /// True only when quarantine was read back from the finished file —
+    /// never assumed from the write having not thrown.
+    var quarantineVerified: Bool = false
+    /// spec: §6 — page the download came from (quarantine provenance).
+    var pageURLString: String?
+    /// Profile/Space the download belongs to. Not sensitive; persisted so
+    /// resumption can refuse a web view from a different profile.
+    var profileID: String?
+    /// Resume data can embed request/URL state, so it is session-only:
+    /// `@Transient` keeps it out of the persisted model store entirely.
+    /// It is lost on relaunch, and Retry then falls back to re-download.
+    @Transient var resumeData: Data?
     var createdAt: Date
     var completedAt: Date?
     var error: String?

@@ -488,11 +488,32 @@ class Tab: ObservableObject, Identifiable {
     }
 
     func continueToInsecureSite() {
+        // No host bypass exists anymore: reloading re-fires the auth
+        // challenge, which routes through BrowserAuthHandler and asks for
+        // an exact, session-scoped certificate decision.
         let url = failedURL ?? self.url
-        guard let host = url.host else { return }
-        browserPage?.bypassSSL(for: host)
         clearNavigationError()
         browserPage?.load(URLRequest(url: url))
+    }
+
+    /// Certificate interstitial state, presented natively (never from web
+    /// content) when BrowserAuthHandler needs a user decision.
+    @Transient @Published var certificateChallenge: CertificateExceptions.Evaluation?
+    @Transient var certificateDecision: ((Bool) -> Void)?
+
+    func presentCertificateChallenge(
+        _ evaluation: CertificateExceptions.Evaluation,
+        decide: @escaping (Bool) -> Void
+    ) {
+        certificateChallenge = evaluation
+        certificateDecision = decide
+    }
+
+    func resolveCertificateChallenge(allowed: Bool) {
+        let decide = certificateDecision
+        certificateChallenge = nil
+        certificateDecision = nil
+        decide?(allowed)
     }
 
     var canGoBack: Bool {

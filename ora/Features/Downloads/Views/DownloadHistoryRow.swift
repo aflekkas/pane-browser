@@ -208,6 +208,9 @@ struct DownloadHistoryRow: View {
     }
 
     private var statusColor: Color {
+        if download.status == .completed, !download.quarantineVerified {
+            return theme.destructive
+        }
         switch download.status {
         case .downloading: return theme.accent
         case .failed: return .red
@@ -225,7 +228,12 @@ struct DownloadHistoryRow: View {
             }
             return download.formattedDownloadedSize
         case .completed:
-            return timeAgo(from: download.completedAt ?? download.createdAt)
+            // Truthful wording: verified means download protection was
+            // applied, not that macOS scanned or approved the file.
+            let checked = download.quarantineVerified
+                ? "macOS download protection applied"
+                : "Download protection could not be verified"
+            return "\(timeAgo(from: download.completedAt ?? download.createdAt)) \u{00B7} \(checked)"
         case .failed:
             return "Failed"
         case .cancelled:
