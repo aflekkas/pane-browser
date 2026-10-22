@@ -106,5 +106,26 @@
     "ui": "Actual SDK full bodies; app dependencies and Query macro stubbed",
     "fullXcode": "pending CI",
     "signedDataProtection": "manual gate; not executed"
-  }
+  },
+  "followupFixes": [
+    {
+      "parentCommit": "ac20aa77182f9b41ef192ab71b149c52b9221d11",
+      "reason": "Qualify Swift.Result type and constructor to avoid the existing importer module-level Result; model that collision in both dependency fixtures",
+      "validation": "Collision reproduced before fix; 36 harness tests in 8 suites and full-body SDK UI typecheck pass after fix; CI ac20aa7 stopped during compilation before runtime tests",
+      "files": [
+        {
+          "path": "ora/Features/Passwords/Services/CredentialVault.swift",
+          "sha256": "34fd980a15b8e58c68d6e070b457dd0e55c4c3a817760324d722ebe71bbf8e2b"
+        },
+        {
+          "path": "oraTests/CredentialVaultHarness/BridgeSupport.swift.fixture",
+          "sha256": "d118d26d7939ff7284555b981236edd81bbbad10c3a674fadf4a67404c277aa1"
+        },
+        {
+          "path": "oraTests/CredentialVaultHarness/UISupport.swift.fixture",
+          "sha256": "7875f21ef4469b5aed37a76d5274d67d5617a10011c86bf79fb0b143ee3c8147"
+        }
+      ]
+    }
+  ]
 }

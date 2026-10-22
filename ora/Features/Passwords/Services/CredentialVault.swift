@@ -33,7 +33,7 @@ final class CredentialVault {
     let service: String
     private let backend: CredentialVaultKeychainBackend
     private let lock = NSRecursiveLock()
-    private var selectedProtection: Result<Protection, Error>?
+    private var selectedProtection: Swift.Result<Protection, Error>?
 
     init(
         backend: CredentialVaultKeychainBackend = KeychainCredentialVaultBackend(),
@@ -54,7 +54,7 @@ final class CredentialVault {
         if let selectedProtection {
             return try selectedProtection.get()
         }
-        let result = Result { try probeProtection() }
+        let result = Swift.Result { try probeProtection() }
         selectedProtection = result
         return try result.get()
     }

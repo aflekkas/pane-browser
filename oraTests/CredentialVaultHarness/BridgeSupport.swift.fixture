@@ -30,3 +30,7 @@ final class SettingsStore {
 }
 final class AppDelegate: NSObject, NSApplicationDelegate { func getWindow() -> NSWindow? { nil } }
 @MainActor func openPasswordsWindow() {}
+
+// Importer.swift declares a module-level, non-generic Result. Preserve its name
+// collision here so isolated checks reject unqualified Swift.Result usage.
+struct Result {}
