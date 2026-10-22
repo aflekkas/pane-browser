@@ -11,6 +11,8 @@ final class LifecycleRepairFixture {
     private let listener: NWListener
     private let queue = DispatchQueue(label: "LifecycleRepairFixture")
     private var connections: [NWConnection] = []
+    private var holdSubresources = false
+    private var heldResources: [NWConnection] = []
 
     init() async throws {
         let parameters = NWParameters.tcp
@@ -43,6 +45,21 @@ final class LifecycleRepairFixture {
         return try #require(URL(string: "http://127.0.0.1:\(port.rawValue)\(path)"))
     }
 
+    func setHoldSubresources(_ hold: Bool) {
+        queue.sync {
+            holdSubresources = hold
+            if !hold {
+                for connection in heldResources {
+                    connection.send(
+                        content: Data("HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n".utf8),
+                        completion: .contentProcessed { _ in connection.cancel() }
+                    )
+                }
+                heldResources.removeAll()
+            }
+        }
+    }
+
     func stop() {
         queue.sync {
             listener.cancel()
@@ -63,7 +80,12 @@ final class LifecycleRepairFixture {
                 if path == "/held" {
                     return
                 }
-                let body = Data(Self.html(path).utf8)
+                if path.hasPrefix("/held-resource") {
+                    self.heldResources.append(connection)
+                    return
+                }
+                let html = Self.html(path) + (self.holdSubresources ? "<img src='/held-resource'>" : "")
+                let body = Data(html.utf8)
                 let header = "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n"
                     + "Content-Length: \(body.count)\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n"
                 connection.send(content: Data(header.utf8) + body, completion: .contentProcessed { _ in
@@ -87,6 +109,7 @@ final class LifecycleRepairFixture {
         }
         return """
         <!doctype html><html><head><title>Lifecycle fixture</title></head><body>
+        <a id='next' href='/b'>Next</a>
         <form id='form'><input id='input' value='saved'><textarea id='area'>saved</textarea></form>
         <div id='bare' contenteditable>saved</div><div id='plain' contenteditable='plaintext-only'>saved</div>
         <div id='host'></div>\(extra)<div style='height:6000px'>Scroll fixture</div>

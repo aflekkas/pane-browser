@@ -25,7 +25,7 @@ final class BrowserPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
     private var pendingLoadRequest: URLRequest?
     private var pendingReload = false
     private let lifecycleRestoration = TabLifecycleRestoreController()
-    private var lifecycleRestoreInFlight = false
+    private let lifecycleRestoreOwner = BrowserLifecycleRestoreOwner()
     private let lifecycleCheckpoint = BrowserLifecycleCheckpoint()
     var onLifecycleNavigation: (() -> Void)?
     /// Password-bridge per-document state (generation, token, tracked
@@ -205,11 +205,6 @@ final class BrowserPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
         supersedeLifecycleRestoration()
         onLifecycleNavigation?()
         webView.goForward()
-    }
-
-    func stopLoading() {
-        cancelAuthentication()
-        webView.stopLoading()
     }
 
     func evaluateJavaScript(_ script: String, completion: ((Any?, Error?) -> Void)? = nil) {
@@ -397,6 +392,9 @@ final class BrowserPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
         // previous document for password purposes immediately, while the
         // navigation is still in progress.
         passwordTracker.invalidate()
+        if lifecycleRestoreOwner.didStart(navigation) {
+            lifecycleCheckpoint.supersede()
+        }
         onLifecycleNavigation?()
         if !isDownloadNavigation {
             originalURL = lastCommittedURL
@@ -427,8 +425,9 @@ final class BrowserPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         if !isDownloadNavigation {
-            lifecycleRestoreInFlight = false
-            lifecycleCheckpoint.didFinish()
+            if lifecycleRestoreOwner.complete(navigation) {
+                lifecycleCheckpoint.didFinish()
+            }
             lastCommittedURL = webView.url
             passwordTracker.commitDocument(url: webView.url)
             emitNavigationEvent(
@@ -443,6 +442,7 @@ final class BrowserPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        failLifecycleRestoration(navigation)
         guard !isDownloadNavigation else {
             originalURL = nil
             return
@@ -464,6 +464,7 @@ final class BrowserPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        failLifecycleRestoration(navigation)
         guard !isDownloadNavigation else {
             originalURL = nil
             return
@@ -594,8 +595,23 @@ final class BrowserPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
 
 /// Lifecycle state assignment shares the page readiness gate.
 extension BrowserPage {
+    func stopLoading() {
+        cancelAuthentication()
+        if lifecycleRestoreOwner.cancel() {
+            lifecycleCheckpoint.supersede()
+            onLifecycleNavigation?()
+        }
+        webView.stopLoading()
+    }
+
+    private func failLifecycleRestoration(_ navigation: WKNavigation?) {
+        guard lifecycleRestoreOwner.complete(navigation) else { return }
+        lifecycleCheckpoint.supersede()
+        onLifecycleNavigation?()
+    }
+
     private func supersedeLifecycleRestoration() {
-        lifecycleRestoreInFlight = false
+        lifecycleRestoreOwner.cancel()
         lifecycleRestoration.supersede()
         lifecycleCheckpoint.supersede()
     }
@@ -604,12 +620,14 @@ extension BrowserPage {
         guard isReadyForNavigation else { return }
         if lifecycleRestoration.applyIfReady(true, assignAndVerify: { data in
             guard let nativeState = lifecycleCheckpoint.prepareRestore(data) else { return false }
-            lifecycleRestoreInFlight = true
+            lifecycleRestoreOwner.beginAssignment()
             webView.interactionState = nativeState
             // Decode updates the back/forward list synchronously. A URL alone
             // can belong to an unrelated navigation and is not restore proof.
             let assigned = webView.backForwardList.currentItem != nil
-            lifecycleRestoreInFlight = assigned
+            if !assigned {
+                lifecycleRestoreOwner.cancel()
+            }
             return assigned
         }) {
             return
@@ -630,7 +648,7 @@ extension BrowserPage {
     /// Capture the live interaction state (history/scroll) for lifecycle
     /// checkpoint/discard. Must run before any teardown.
     var hasPendingLifecycleRestore: Bool {
-        lifecycleRestoration.hasPendingRestore || lifecycleRestoreInFlight
+        lifecycleRestoration.hasPendingRestore || lifecycleRestoreOwner.isRestoring
     }
 
     var lifecycleFallbackURL: URL? {
