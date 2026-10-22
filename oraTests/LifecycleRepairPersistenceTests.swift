@@ -17,6 +17,7 @@ struct LifecycleRepairPersistenceTests {
         let manager = TabManager(modelContainer: reopened, modelContext: context, mediaController: MediaController())
         let tab = try #require(context.fetch(FetchDescriptor<Tab>()).first { $0.id == tabID })
         #expect(tab.browserPage == nil && tab.isDiscarded)
+        defer { manager.closeLifecycleFixture() }
         manager.activateTab(tab)
         let harness = try LifecycleRepairHarness(page: #require(tab.browserPage))
         defer { harness.close()
@@ -94,12 +95,17 @@ struct LifecycleRepairPersistenceTests {
     @Test func pendingRestoreIsSupersededByReplacementURLBeforePrivacyReadiness() async throws {
         let fixture = try await LifecycleRepairFixture()
         defer { fixture.stop() }
+        let source = LifecycleRepairHarness()
+        defer { source.close() }
+        try await source.load(fixture.url())
+        try await source.load(fixture.url("/b"))
+        let validState = try #require(source.page.captureInteractionState())
         let harness = LifecycleRepairHarness()
         defer { harness.close() }
         var outcome: TabLifecycleRestoreOutcome?
         // No suspension since construction: production privacy readiness is
         // delivered by DispatchGroup.notify on the main queue.
-        harness.page.restoreInteractionState(Data([1, 2, 3])) { outcome = $0 }
+        harness.page.restoreInteractionState(validState) { outcome = $0 }
         #expect(outcome == nil)
         let replacement = try fixture.url("/b")
         harness.page.load(URLRequest(url: replacement))
@@ -118,7 +124,7 @@ struct LifecycleRepairPersistenceTests {
         let coordinator = TabLifecycleQuitCoordinator()
         var managers: [TabManager] = [], tabs: [Tab] = [], harnesses: [LifecycleRepairHarness] = []
         defer { harnesses.forEach { $0.close() }
-            tabs.forEach { $0.finishLifecycleDiscard() }
+            managers.forEach { $0.closeLifecycleFixture() }
         }
         for index in 0 ..< 3 {
             let isPrivate = index == 2
@@ -156,6 +162,7 @@ struct LifecycleRepairPersistenceTests {
             modelContext: context,
             mediaController: MediaController()
         )
+        defer { restoredManager.closeLifecycleFixture() }
         for tab in try context.fetch(FetchDescriptor<Tab>()) {
             restoredManager.activateTab(tab)
             let harness = try LifecycleRepairHarness(page: #require(tab.browserPage))
@@ -179,12 +186,11 @@ struct LifecycleRepairPersistenceTests {
         )
         let harness = try LifecycleRepairHarness(page: #require(tab.browserPage))
         defer { harness.close()
-            tab.tabManager = nil
+            manager.closeLifecycleFixture()
         }
         try await harness.loaded(fixture.url())
         try await harness.load(fixture.url("/b"))
-        _ = try await harness.evaluate("window.scrollTo(0,1200); true")
-        try await Task.sleep(for: .milliseconds(200))
+        try await harness.scroll(to: 1200)
         #expect(tab.captureInteractionState())
         tab.discard()
         #expect(tab.isDiscarded && tab.browserPage == nil)

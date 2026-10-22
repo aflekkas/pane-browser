@@ -113,29 +113,12 @@ class TabManager: ObservableObject {
     }
 
     func togglePinTab(_ tab: Tab) {
-        if tab.type == .pinned {
-            tab.type = .normal
-            tab.savedURL = nil
-            tab.userPinnedExplicitly = false
-        } else {
-            tab.type = .pinned
-            tab.savedURL = tab.url
-            // An explicit pin action is Pane's "nailed by the user" guard.
-            tab.userPinnedExplicitly = true
-        }
-
+        tab.setUserSection(tab.type == .pinned ? .normal : .pinned)
         try? modelContext.save()
     }
 
     func toggleFavTab(_ tab: Tab) {
-        if tab.type == .fav {
-            tab.type = .normal
-            tab.savedURL = nil
-        } else {
-            tab.type = .fav
-            tab.savedURL = tab.url
-        }
-
+        tab.setUserSection(tab.type == .fav ? .normal : .fav)
         try? modelContext.save()
     }
 
@@ -575,7 +558,7 @@ class TabManager: ObservableObject {
         for container in fetchContainers() {
             for tab in container.tabs where tab.browserPage != nil && !tab.isPrivate {
                 // Private windows have no session to persist at application quit.
-                if !tab.captureInteractionState() {
+                if tab.captureLifecycleCheckpoint() == .saveFailed {
                     succeeded = false
                 }
             }

@@ -58,6 +58,7 @@ final class DownloadFlowHarness {
         }
         page.teardown()
         window.close()
+        tab.tabManager?.closeLifecycleFixture()
         tab.tabManager = nil
         try? FileManager.default.removeItem(at: directory)
     }

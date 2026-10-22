@@ -156,13 +156,7 @@ class Tab: ObservableObject, Identifiable {
     }
 
     func switchSections(from: Tab, to: Tab) {
-        from.type = to.type
-        switch to.type {
-        case .pinned, .fav:
-            from.savedURL = from.url
-        case .normal:
-            from.savedURL = nil
-        }
+        from.setUserSection(to.type)
     }
 
     func updateHeaderColor() {
@@ -188,6 +182,7 @@ class Tab: ObservableObject, Identifiable {
     }
 
     func maintainSnapShots() {
+        guard browserPage != nil else { return }
         if !self.colorUpdated || self.browserPage?.isLoading == true, self.maybeIsActive {
             self.updateHeaderColor()
 
@@ -249,7 +244,8 @@ class Tab: ObservableObject, Identifiable {
         browserPage = page
         self.isPrivate = isPrivate
         page.onLifecycleNavigation = { [weak self, weak page] in
-            guard let self, let page, self.browserPage === page else { return }
+            guard let self, let page, self.browserPage === page,
+                  !page.hasPendingLifecycleRestore else { return }
             self.invalidateLifecycleSnapshot()
         }
 
@@ -335,28 +331,7 @@ class Tab: ObservableObject, Identifiable {
     /// keep the blob in memory only.
     @discardableResult
     func captureInteractionState() -> Bool {
-        guard let page = browserPage,
-              page.profileIdentifier == container.id, page.isPrivateProfile == isPrivate,
-              !page.isLoading, let data = page.captureInteractionState()
-        else {
-            // An old checkpoint is never a fallback for failed/oversize capture.
-            invalidateLifecycleSnapshot()
-            return false
-        }
-        if let currentURL = page.currentURL {
-            url = currentURL
-            urlString = currentURL.absoluteString
-        }
-        if isPrivate {
-            privateInteractionState = data
-            return true
-        }
-        guard let context = modelContext else { return false }
-        let saved = TabLifecycleSnapshotStore.save(
-            tabID: id, containerID: container.id, data: data, isPrivate: false, in: context
-        )
-        lifecycleSnapshotSaveFailed = !saved
-        return saved
+        captureLifecycleCheckpoint() == .saved
     }
 
     /// Automatic unload requires a current, durable checkpoint. On failure the

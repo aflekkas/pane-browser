@@ -2,6 +2,7 @@ import AppKit
 import Foundation
 import Network
 @testable import Ora
+import SwiftData
 import Testing
 import WebKit
 
@@ -59,6 +60,9 @@ final class LifecycleRepairFixture {
             }
             if let text = String(data: data, encoding: .utf8), text.contains("\r\n\r\n") {
                 let path = text.split(separator: " ").dropFirst().first.map(String.init) ?? "/a"
+                if path == "/held" {
+                    return
+                }
                 let body = Data(Self.html(path).utf8)
                 let header = "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n"
                     + "Content-Length: \(body.count)\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n"
@@ -158,4 +162,47 @@ final class LifecycleRepairHarness {
     }
 
     enum FixtureError: Error { case timeout }
+}
+
+@MainActor
+extension LifecycleRepairHarness {
+    func scroll(to offset: Double) async throws {
+        _ = try await evaluate("window.scrollTo(0,\(offset)); true")
+        try await expectScroll(y: offset)
+        // Let the isolated-world scroll event reach the native checkpoint.
+        _ = try await page.webView.takeSnapshot(configuration: nil)
+        await Task.yield()
+    }
+
+    func expectScroll(y offset: Double) async throws {
+        for _ in 0 ..< 40 {
+            let actual = try await evaluate("window.scrollY") as? Double ?? -1
+            if abs(actual - offset) < 2 {
+                return
+            }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        try await Issue.record("Expected actual WebKit scrollY \(offset), got \(evaluate("window.scrollY"))")
+    }
+}
+
+@MainActor
+extension TabManager {
+    /// Break fixture ownership cycles and stop late model writes before an
+    /// on-disk fixture directory is removed.
+    func closeLifecycleFixture() {
+        modelContext.autosaveEnabled = false
+        modelContainer.mainContext.autosaveEnabled = false
+        for tab in (try? modelContext.fetch(FetchDescriptor<Tab>())) ?? [] {
+            tab.finishLifecycleDiscard()
+            tab.tabManager = nil
+            tab.historyManager = nil
+            tab.downloadManager = nil
+        }
+        activeTab = nil
+        activeContainer = nil
+        modelContext.undoManager?.removeAllActions()
+        modelContext.undoManager = nil
+        try? modelContext.save()
+    }
 }

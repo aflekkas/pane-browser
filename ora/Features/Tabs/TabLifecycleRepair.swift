@@ -1,6 +1,47 @@
 import Foundation
 
+enum TabLifecycleCaptureOutcome: Equatable {
+    case saved
+    case pendingRestore
+    case urlOnly
+    case saveFailed
+}
+
 extension Tab {
+    /// Every user section change, including drag/drop, updates durable intent.
+    func setUserSection(_ section: TabType) {
+        type = section
+        userPinnedExplicitly = section == .pinned
+        savedURL = section == .normal ? nil : url
+    }
+
+    func captureLifecycleCheckpoint() -> TabLifecycleCaptureOutcome {
+        guard let page = browserPage,
+              page.profileIdentifier == container.id, page.isPrivateProfile == isPrivate else { return .urlOnly }
+        // The queued checkpoint is authoritative until WebKit actually applies
+        // it. A newly created view has a valid but empty interactionState blob.
+        guard !page.hasPendingLifecycleRestore else { return .pendingRestore }
+        if let currentURL = page.lifecycleFallbackURL {
+            url = currentURL
+            urlString = currentURL.absoluteString
+        }
+        guard page.isLifecycleCaptureReady, let data = page.captureInteractionState() else {
+            // Loading, not-yet-ready and oversized pages retain their URL and
+            // any existing checkpoint. They must not block application quit.
+            return .urlOnly
+        }
+        if isPrivate {
+            privateInteractionState = data
+            return .saved
+        }
+        guard let context = modelContext else { return .saveFailed }
+        let saved = TabLifecycleSnapshotStore.save(
+            tabID: id, containerID: container.id, data: data, isPrivate: false, in: context
+        )
+        lifecycleSnapshotSaveFailed = !saved
+        return saved ? .saved : .saveFailed
+    }
+
     /// Called before navigation and on route changes. Pending probes are bound
     /// to page identity plus navigation generation; stale blobs are ineligible.
     func invalidateLifecycleSnapshot() {

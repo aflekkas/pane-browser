@@ -47,6 +47,9 @@ enum TabLifecycleSnapshotStore {
             try? context.save()
             return false
         }
+        let prior = fetch(tabID: tabID, in: context).map {
+            ($0.containerID, $0.interactionState, $0.capturedAt)
+        }
         if let existing = fetch(tabID: tabID, in: context) {
             existing.containerID = containerID
             existing.interactionState = data
@@ -62,9 +65,15 @@ enum TabLifecycleSnapshotStore {
             }
             return true
         } catch {
-            // Do not report an in-memory upsert as durable, or permit an old
-            // blob to remain eligible in this context after capture failure.
-            delete(tabID: tabID, in: context)
+            // Restore the prior checkpoint in memory as well as on disk. A
+            // failed write must not turn the next context save into deletion.
+            if let prior, let existing = fetch(tabID: tabID, in: context) {
+                existing.containerID = prior.0
+                existing.interactionState = prior.1
+                existing.capturedAt = prior.2
+            } else {
+                delete(tabID: tabID, in: context)
+            }
             return false
         }
     }

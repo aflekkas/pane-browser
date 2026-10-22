@@ -43,7 +43,7 @@ struct LifecycleRepairPolicyTests {
         #expect(policy.stage(for: pinned, at: now) == .checkpoint)
     }
 
-    @Test func failedSaveAndOversizeReplacementNeverReportDurabilityOrReuseOldBlob() throws {
+    @Test func failedSavePreservesPriorCheckpointAndInvalidInputNeverReportsDurability() throws {
         let container = try ModelContainer(
             for: TabSessionSnapshot.self, configurations: ModelConfiguration(isStoredInMemoryOnly: true)
         )
@@ -57,7 +57,7 @@ struct LifecycleRepairPolicyTests {
             tabID: tabID, containerID: profileID, data: Data([2]), isPrivate: false, in: context,
             persist: { _ in throw WriteFailure() }
         ))
-        #expect(TabLifecycleSnapshotStore.restoreData(tabID: tabID, containerID: profileID, in: context) == nil)
+        #expect(TabLifecycleSnapshotStore.restoreData(tabID: tabID, containerID: profileID, in: context) == Data([1]))
         #expect(!TabLifecycleSnapshotStore.save(
             tabID: tabID, containerID: profileID,
             data: Data(count: TabInteractionStateCodec.maximumByteCount + 1), isPrivate: false, in: context

@@ -8,6 +8,8 @@ final class TabBrowserPageDelegate: BrowserPageDelegate {
 
     private var progressResetWorkItem: DispatchWorkItem?
 
+    deinit { progressResetWorkItem?.cancel() }
+
     func browserPage(
         _ page: BrowserPage,
         decidePolicyFor navigationAction: BrowserNavigationAction
@@ -94,8 +96,9 @@ final class TabBrowserPageDelegate: BrowserPageDelegate {
                 tab.updateHeaderColor()
             }
 
-            let workItem = DispatchWorkItem { [weak tab] in
-                tab?.loadingProgress = 0
+            let workItem = DispatchWorkItem { [weak tab, weak page] in
+                guard let tab, let page, tab.browserPage === page else { return }
+                tab.loadingProgress = 0
             }
             progressResetWorkItem = workItem
             DispatchQueue.main.asyncAfter(deadline: .now() + 3.0, execute: workItem)
@@ -267,7 +270,7 @@ final class TabBrowserPageDelegate: BrowserPageDelegate {
                 rect: CGRect(x: 0, y: 0, width: page.contentView.bounds.width, height: 24),
                 afterScreenUpdates: false
             )
-        ) { [weak self] image, error in
+        ) { [weak self, weak page] image, error in
             guard let self, let image, error == nil, let cgImage = image.cgImage(
                 forProposedRect: nil,
                 context: nil,
@@ -276,6 +279,7 @@ final class TabBrowserPageDelegate: BrowserPageDelegate {
 
             let color = self.extractDominantColor(from: cgImage) ?? .black
             DispatchQueue.main.async {
+                guard let page, self.tab?.browserPage === page else { return }
                 self.tab?.updateBackgroundColor(Color(nsColor: color))
                 self.tab?.colorUpdated = true
             }

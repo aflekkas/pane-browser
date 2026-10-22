@@ -25,6 +25,8 @@ final class BrowserPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
     private var pendingLoadRequest: URLRequest?
     private var pendingReload = false
     private let lifecycleRestoration = TabLifecycleRestoreController()
+    private var lifecycleRestoreInFlight = false
+    private let lifecycleCheckpoint = BrowserLifecycleCheckpoint()
     var onLifecycleNavigation: (() -> Void)?
     /// Password-bridge per-document state (generation, token, tracked
     /// document URL). See `PasswordDocumentTracker`.
@@ -38,7 +40,8 @@ final class BrowserPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
     init(
         profile: BrowserEngineProfile,
         configuration: BrowserPageConfiguration,
-        delegate: BrowserPageDelegate?
+        delegate: BrowserPageDelegate?,
+        navigationReadinessGate: ((@escaping () -> Void) -> Void)? = nil
     ) {
         let webConfiguration = WKWebViewConfiguration()
         webConfiguration.applicationNameForUserAgent = configuration.userAgent
@@ -81,6 +84,7 @@ final class BrowserPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
 
         super.init()
         TabLifecycleActivityProbe.install(on: contentController)
+        lifecycleCheckpoint.install(on: webView)
 
         for messageName in configuration.scriptMessageNames {
             if isolatedMessageNames.contains(messageName) {
@@ -119,8 +123,15 @@ final class BrowserPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
             webConfiguration,
             spaceID: profile.identifier
         ) { [weak self] in
-            self?.isReadyForNavigation = true
-            self?.flushPendingNavigationIfNeeded()
+            let ready: () -> Void = { [weak self] in
+                self?.isReadyForNavigation = true
+                self?.flushPendingNavigationIfNeeded()
+            }
+            if let navigationReadinessGate {
+                navigationReadinessGate(ready)
+            } else {
+                ready()
+            }
         }
     }
 
@@ -158,7 +169,7 @@ final class BrowserPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
 
     func load(_ request: URLRequest) {
         cancelAuthentication()
-        lifecycleRestoration.supersede()
+        supersedeLifecycleRestoration()
         onLifecycleNavigation?()
         guard isReadyForNavigation else {
             pendingLoadRequest = request
@@ -171,7 +182,7 @@ final class BrowserPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
 
     func reload() {
         cancelAuthentication()
-        lifecycleRestoration.supersede()
+        supersedeLifecycleRestoration()
         onLifecycleNavigation?()
         guard isReadyForNavigation else {
             pendingReload = true
@@ -184,14 +195,14 @@ final class BrowserPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
 
     func goBack() {
         cancelAuthentication()
-        lifecycleRestoration.supersede()
+        supersedeLifecycleRestoration()
         onLifecycleNavigation?()
         webView.goBack()
     }
 
     func goForward() {
         cancelAuthentication()
-        lifecycleRestoration.supersede()
+        supersedeLifecycleRestoration()
         onLifecycleNavigation?()
         webView.goForward()
     }
@@ -272,7 +283,7 @@ final class BrowserPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
     func teardown() {
         cancelAuthentication()
         downloadActivity.clear()
-        lifecycleRestoration.supersede()
+        supersedeLifecycleRestoration()
         onLifecycleNavigation = nil
         pendingLoadRequest = nil
         pendingReload = false
@@ -291,30 +302,8 @@ final class BrowserPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
                 controller.removeScriptMessageHandler(forName: messageName)
             }
         }
+        lifecycleCheckpoint.teardown()
         webView.removeFromSuperview()
-    }
-
-    private func flushPendingNavigationIfNeeded() {
-        guard isReadyForNavigation else { return }
-        if lifecycleRestoration.applyIfReady(true, assignAndVerify: { data in
-            webView.interactionState = data
-            // Decode updates the back/forward list synchronously. A URL alone
-            // can belong to an unrelated navigation and is not restore proof.
-            return webView.backForwardList.currentItem != nil
-        }) {
-            return
-        }
-
-        if let pendingLoadRequest {
-            self.pendingLoadRequest = nil
-            webView.load(pendingLoadRequest)
-            return
-        }
-
-        if pendingReload {
-            pendingReload = false
-            webView.reload()
-        }
     }
 
     private func emitNavigationEvent(
@@ -423,6 +412,7 @@ final class BrowserPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
         if !isDownloadNavigation {
+            lifecycleCheckpoint.didCommit()
             lastCommittedURL = webView.url
             passwordTracker.commitDocument(url: webView.url)
             emitNavigationEvent(
@@ -437,6 +427,8 @@ final class BrowserPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         if !isDownloadNavigation {
+            lifecycleRestoreInFlight = false
+            lifecycleCheckpoint.didFinish()
             lastCommittedURL = webView.url
             passwordTracker.commitDocument(url: webView.url)
             emitNavigationEvent(
@@ -602,10 +594,58 @@ final class BrowserPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
 
 /// Lifecycle state assignment shares the page readiness gate.
 extension BrowserPage {
+    private func supersedeLifecycleRestoration() {
+        lifecycleRestoreInFlight = false
+        lifecycleRestoration.supersede()
+        lifecycleCheckpoint.supersede()
+    }
+
+    private func flushPendingNavigationIfNeeded() {
+        guard isReadyForNavigation else { return }
+        if lifecycleRestoration.applyIfReady(true, assignAndVerify: { data in
+            guard let nativeState = lifecycleCheckpoint.prepareRestore(data) else { return false }
+            lifecycleRestoreInFlight = true
+            webView.interactionState = nativeState
+            // Decode updates the back/forward list synchronously. A URL alone
+            // can belong to an unrelated navigation and is not restore proof.
+            let assigned = webView.backForwardList.currentItem != nil
+            lifecycleRestoreInFlight = assigned
+            return assigned
+        }) {
+            return
+        }
+
+        if let pendingLoadRequest {
+            self.pendingLoadRequest = nil
+            webView.load(pendingLoadRequest)
+            return
+        }
+
+        if pendingReload {
+            pendingReload = false
+            webView.reload()
+        }
+    }
+
     /// Capture the live interaction state (history/scroll) for lifecycle
     /// checkpoint/discard. Must run before any teardown.
+    var hasPendingLifecycleRestore: Bool {
+        lifecycleRestoration.hasPendingRestore || lifecycleRestoreInFlight
+    }
+
+    var lifecycleFallbackURL: URL? {
+        pendingLoadRequest?.url ?? webView.url
+    }
+
+    var isLifecycleCaptureReady: Bool {
+        isReadyForNavigation && !hasPendingLifecycleRestore && pendingLoadRequest == nil
+            && !pendingReload && !webView.isLoading && webView.backForwardList.currentItem != nil
+    }
+
     func captureInteractionState() -> Data? {
-        TabInteractionStateCodec.validated(webView.interactionState as? Data)
+        guard isLifecycleCaptureReady else { return nil }
+        guard let data = webView.interactionState as? Data else { return nil }
+        return lifecycleCheckpoint.capture(data, url: webView.url)
     }
 
     /// Completion is delivered only after actual assignment/verification, or

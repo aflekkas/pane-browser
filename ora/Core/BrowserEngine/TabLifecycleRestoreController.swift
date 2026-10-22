@@ -16,6 +16,10 @@ final class TabLifecycleRestoreController {
 
     private var pending: Pending?
 
+    var hasPendingRestore: Bool {
+        pending != nil
+    }
+
     func enqueue(_ data: Data, completion: @escaping (TabLifecycleRestoreOutcome) -> Void) {
         supersede()
         guard TabInteractionStateCodec.isValid(data) else {

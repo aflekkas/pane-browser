@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 
 /// Registers every window's manager independently of URL routing and focus.
@@ -12,6 +13,44 @@ final class TabLifecycleQuitCoordinator {
         init(_ manager: TabManager) {
             self.manager = manager
         }
+    }
+
+    enum SaveFailureChoice { case retry, quitAnyway, cancel }
+
+    /// Only a durable save error needs a decision. Capture limitations already
+    /// fall back to saved tab URLs in each manager.
+    func requestTermination(
+        capture: (() -> Bool)? = nil,
+        onSaveFailure: () -> SaveFailureChoice,
+        reply: (Bool) -> Void
+    ) {
+        while !(capture?() ?? captureAllLiveSnapshots()) {
+            switch onSaveFailure() {
+            case .retry: continue
+            case .quitAnyway: reply(true)
+                return
+            case .cancel: reply(false)
+                return
+            }
+        }
+        reply(true)
+    }
+
+    func replyToApplicationTermination() {
+        requestTermination(onSaveFailure: {
+            let alert = NSAlert()
+            alert.messageText = "Pane couldn't save your session"
+            alert.informativeText = "Retry saving, or quit anyway. Recent tab history and scroll positions may be lost."
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "Retry")
+            alert.addButton(withTitle: "Quit Anyway")
+            alert.addButton(withTitle: "Cancel")
+            switch alert.runModal() {
+            case .alertFirstButtonReturn: return .retry
+            case .alertSecondButtonReturn: return .quitAnyway
+            default: return .cancel
+            }
+        }, reply: { NSApp.reply(toApplicationShouldTerminate: $0) })
     }
 
     private var entries: [ObjectIdentifier: Entry] = [:]
