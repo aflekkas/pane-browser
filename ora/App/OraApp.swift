@@ -3,6 +3,7 @@ import Foundation
 import SwiftData
 import SwiftUI
 
+@MainActor
 class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Disable automatic window tabbing for all NSWindow instances
@@ -49,86 +50,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func handleIncomingURLs(_ urls: [URL]) {
-        for url in urls {
-            urlRegistry.deliver(url, needsWindow: browserWindowFactory)
-        }
-    }
-
-    func consumePendingOpenURLs() -> [URL] {
-        urlRegistry.consumePending()
-    }
-}
-
-/// Explicit ready-recipient delivery for external URLs.
-///
-/// A URL is delivered immediately only when a browser root has
-/// registered itself ready (OraRoot onAppear). Otherwise it is queued
-/// (FIFO, exactly once) and a browser window is requested; registration
-/// drains the queue after the recipient is in place. Window existence
-/// alone is never treated as readiness — an unrelated or not-yet-ready
-/// window cannot swallow a URL, and a closed recipient (unregistered)
-/// returns delivery to the queue instead of dropping the URL.
-final class BrowserURLRecipientRegistry {
-    static let shared = BrowserURLRecipientRegistry()
-
-    private var handler: ((URL) -> Void)?
-    private var handlerToken: UUID?
-    private var queue = OpenURLQueue()
-
-    var isReady: Bool {
-        handler != nil
-    }
-
-    var pendingCount: Int {
-        queue.urls.count
-    }
-
-    @discardableResult
-    func register(_ handler: @escaping (URL) -> Void) -> UUID {
-        let token = UUID()
-        self.handler = handler
-        handlerToken = token
-        for url in queue.drain() {
-            handler(url)
-        }
-        return token
-    }
-
-    func unregister(token: UUID) {
-        guard handlerToken == token else { return }
-        handler = nil
-        handlerToken = nil
-    }
-
-    func deliver(_ url: URL, needsWindow: () -> Void = {}) {
-        if let handler {
-            handler(url)
-            return
-        }
-        queue.enqueue([url])
-        needsWindow()
-    }
-
-    func consumePending() -> [URL] {
-        queue.drain()
-    }
-}
-
-/// FIFO of external URLs waiting for the first browser window.
-struct OpenURLQueue {
-    private(set) var urls: [URL] = []
-
-    var isEmpty: Bool {
-        urls.isEmpty
-    }
-
-    mutating func enqueue(_ newURLs: [URL]) {
-        urls.append(contentsOf: newURLs)
-    }
-
-    mutating func drain() -> [URL] {
-        defer { urls = [] }
-        return urls
+        urlRegistry.deliver(urls, needsWindow: browserWindowFactory)
     }
 }
 
