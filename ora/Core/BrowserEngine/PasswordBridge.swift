@@ -78,7 +78,7 @@ extension BrowserScriptContentWorld {
     var wkContentWorld: WKContentWorld {
         switch self {
         case .page:
-            .pageWorld
+            .page
         case let .isolated(name):
             .world(name: name)
         }
