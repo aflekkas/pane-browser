@@ -649,8 +649,12 @@ extension BrowserPage {
         }
     }
 
-    /// Capture the live interaction state (history/scroll) for lifecycle
-    /// checkpoint/discard. Must run before any teardown.
+    /// Test-only observer; unset in production to avoid logging browsing data.
+    var lifecycleViewportDiagnosticHandler: (([String: Any]) -> Void)? {
+        get { lifecycleCheckpoint.onDiagnostic }
+        set { lifecycleCheckpoint.onDiagnostic = newValue }
+    }
+
     var hasPendingLifecycleRestore: Bool {
         lifecycleRestoration.hasPendingRestore || lifecycleRestoreOwner.isRestoring
             || lifecycleCheckpoint.hasPendingRestore

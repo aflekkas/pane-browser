@@ -26,6 +26,8 @@ struct LifecycleReviewRegressionTests {
         // under concurrent test windows, suspending requestAnimationFrame.
         let harness = try LifecycleRepairHarness(page: #require(tab.browserPage), isVisible: false)
         defer { harness.close() }
+        harness.traceViewport()
+        defer { harness.dumpViewportTrace() }
         try await harness.loaded(fixture.url("/b"))
         #expect(try await harness.evaluate("document.visibilityState") as? String == "hidden")
         #expect(tab.canGoBack)

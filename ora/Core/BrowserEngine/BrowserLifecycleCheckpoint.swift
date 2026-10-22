@@ -19,6 +19,9 @@ final class BrowserLifecycleCheckpoint: NSObject, WKScriptMessageHandler {
     private var position: (url: String, scrollX: Double, scrollY: Double)?
     private var restoring: Payload?
     private var restoreID: UUID?
+    private var captureBlocked = false
+    /// Opt-in diagnostics for hosted flow tests; never logs browsing data by default.
+    var onDiagnostic: (([String: Any]) -> Void)?
     var hasPendingRestore: Bool {
         restoring != nil
     }
@@ -45,11 +48,25 @@ final class BrowserLifecycleCheckpoint: NSObject, WKScriptMessageHandler {
               url == webView.url?.absoluteString,
               let scrollX = body["scrollX"] as? Double, let scrollY = body["scrollY"] as? Double,
               scrollX.isFinite, scrollY.isFinite else { return }
+        onDiagnostic?(body)
         if let acknowledgement = body["restoreID"] as? String {
-            // Only this assignment can release its pending viewport restore.
-            guard restoring != nil, acknowledgement == restoreID?.uuidString else { return }
+            guard let payload = restoring, acknowledgement == restoreID?.uuidString else { return }
+            if body["phase"] as? String == "abandoned" {
+                restoring = nil
+                restoreID = nil
+                captureBlocked = true // URL-only fallback retains the last durable checkpoint.
+                return
+            }
+            guard BrowserLifecycleViewportRestore
+                .accepts(body, requestedX: payload.scrollX, requestedY: payload.scrollY)
+            else {
+                return
+            }
             restoring = nil
             restoreID = nil
+            var accepted = body
+            accepted["phase"] = "native-accepted"
+            onDiagnostic?(accepted)
         } else if restoring != nil {
             // Ignore the restored document's initial zero-position reports.
             return
@@ -58,7 +75,8 @@ final class BrowserLifecycleCheckpoint: NSObject, WKScriptMessageHandler {
     }
 
     func capture(_ state: Data, url: URL?) -> Data? {
-        guard !hasPendingRestore, let state = TabInteractionStateCodec.validated(state) else { return nil }
+        guard !hasPendingRestore, !captureBlocked,
+              let state = TabInteractionStateCodec.validated(state) else { return nil }
         guard let position, position.url == url?.absoluteString else { return state }
         let payload = Payload(
             interactionState: state,
@@ -78,10 +96,18 @@ final class BrowserLifecycleCheckpoint: NSObject, WKScriptMessageHandler {
               TabInteractionStateCodec.isValid(payload.interactionState) else { return nil }
         restoring = payload
         restoreID = UUID()
+        onDiagnostic?([
+            "phase": "prepared",
+            "requestedX": payload.scrollX,
+            "requestedY": payload.scrollY,
+            "url": payload.url,
+            "restoreID": restoreID?.uuidString ?? ""
+        ])
         return payload.interactionState
     }
 
     func didCommit() {
+        onDiagnostic?(["phase": "native-commit", "url": webView?.url?.absoluteString ?? ""])
         position = nil
     }
 
@@ -92,38 +118,28 @@ final class BrowserLifecycleCheckpoint: NSObject, WKScriptMessageHandler {
         }
         guard let encodedURL = try? JSONEncoder().encode(payload.url),
               let literal = String(data: encodedURL, encoding: .utf8) else { return }
-        // WebKit can apply its native scroll after didFinish, so wait for the
-        // rendering frame. Hidden views suspend frames: keep the authoritative
-        // checkpoint pending until this operation acknowledges actual application.
-        // A replacement document/assignment cannot acknowledge an obsolete token.
-        webView.evaluateJavaScript("""
-        (() => {
-        const operation = { id: "\(restoreID.uuidString)" };
-        globalThis.__paneLifecycleViewportRestore = operation;
-        operation.frame = requestAnimationFrame(() => {
-          if (globalThis.__paneLifecycleViewportRestore !== operation || location.href !== \(literal)) return;
-          delete globalThis.__paneLifecycleViewportRestore;
-          scrollTo(\(payload.scrollX), \(payload.scrollY));
-          window.webkit.messageHandlers.paneLifecycleScroll.postMessage({
-            url: location.href, scrollX: scrollX, scrollY: scrollY,
-            restoreID: "\(restoreID.uuidString)"
-          });
-        });
-        })(); true;
-        """, in: nil, in: Self.world, completionHandler: nil)
+        onDiagnostic?(["phase": "native-finish", "url": payload.url, "restoreID": restoreID.uuidString])
+        webView.evaluateJavaScript(
+            BrowserLifecycleViewportRestore.script(
+                id: restoreID, urlLiteral: literal, scrollX: payload.scrollX, scrollY: payload.scrollY
+            ), in: nil, in: Self.world, completionHandler: nil
+        )
     }
 
     func supersede() {
         if let restoreID {
+            onDiagnostic?(["phase": "superseded", "restoreID": restoreID.uuidString])
             webView?.evaluateJavaScript("""
             if (globalThis.__paneLifecycleViewportRestore?.id === "\(restoreID.uuidString)") {
               cancelAnimationFrame(globalThis.__paneLifecycleViewportRestore.frame);
+              globalThis.__paneLifecycleViewportRestore.cancel?.();
               delete globalThis.__paneLifecycleViewportRestore;
             } true;
             """, in: nil, in: Self.world, completionHandler: nil)
         }
         restoring = nil
         restoreID = nil
+        captureBlocked = false
         position = nil
     }
 

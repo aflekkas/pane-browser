@@ -122,6 +122,7 @@ final class LifecycleRepairFixture {
 final class LifecycleRepairHarness {
     private let window: NSWindow
     private(set) var page: BrowserPage
+    private var viewportTrace: [[String: Any]] = []
 
     init(page: BrowserPage? = nil, profile: BrowserEngineProfile? = nil, isVisible: Bool = true) {
         self.page = page ?? BrowserEngine().makePage(
@@ -249,5 +250,33 @@ extension TabManager {
         modelContext.undoManager?.removeAllActions()
         modelContext.undoManager = nil
         try? modelContext.save()
+    }
+}
+
+@MainActor
+extension LifecycleRepairHarness {
+    /// Bounded, opt-in localhost diagnostics for the complete Tab/disk restore
+    /// route. Production never installs this observer or logs browsing data.
+    func traceViewport() {
+        page.lifecycleViewportDiagnosticHandler = { [weak self] event in
+            guard let self else { return }
+            var event = event
+            event["nativeTime"] = ProcessInfo.processInfo.systemUptime
+            event["nativeURL"] = self.page.currentURL?.absoluteString ?? ""
+            event["generation"] = self.page.passwordNavigationGeneration
+            event["pending"] = self.page.hasPendingLifecycleRestore
+            event["viewWidth"] = self.page.contentView.bounds.width
+            event["viewHeight"] = self.page.contentView.bounds.height
+            self.viewportTrace.append(event)
+            if self.viewportTrace.count > 64 {
+                self.viewportTrace.removeFirst()
+            }
+        }
+    }
+
+    func dumpViewportTrace() {
+        guard let data = try? JSONSerialization.data(withJSONObject: viewportTrace, options: [.sortedKeys]),
+              let text = String(data: data, encoding: .utf8) else { return }
+        FileHandle.standardError.write(Data("Lifecycle viewport trace: \(text)\n".utf8))
     }
 }
