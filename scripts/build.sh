@@ -83,14 +83,14 @@ xcodebuild -exportArchive \
     -exportPath "$EXPORT_PATH" \
     -exportOptionsPlist "$EXPORT_OPTIONS_PLIST"
 
-APP_PATH="$EXPORT_PATH/Ora.app"
+APP_PATH="$EXPORT_PATH/Pane.app"
 [[ -d "$APP_PATH" ]] || die "Export failed — ${APP_PATH} not found."
 
 echo "Copying exported app bundle..."
-ditto "$APP_PATH" "build/Ora.app"
+ditto "$APP_PATH" "build/Pane.app"
 
 echo "Verifying exported app signature..."
-codesign --verify --deep --strict --verbose=4 "build/Ora.app" >/dev/null || die "App signature verification failed after export."
+codesign --verify --deep --strict --verbose=4 "build/Pane.app" >/dev/null || die "App signature verification failed after export."
 
 # --- Sign ---
 
@@ -103,7 +103,7 @@ create-dmg \
     --volname "Ora Browser" \
     --skip-jenkins \
     "build/${DMG_NAME}" \
-    "build/Ora.app" 2>/dev/null || true
+    "build/Pane.app" 2>/dev/null || true
 
 # create-dmg sometimes uses a temp name
 TEMP_DMG=$(ls build/rw.*.dmg 2>/dev/null | head -1 || true)
@@ -142,6 +142,6 @@ fi
 
 echo "Stapling notarization ticket..."
 xcrun stapler staple "build/${DMG_NAME}"
-xcrun stapler staple "build/Ora.app"
+xcrun stapler staple "build/Pane.app"
 
 green "Build complete: build/${DMG_NAME} ($(du -h "build/${DMG_NAME}" | cut -f1))"

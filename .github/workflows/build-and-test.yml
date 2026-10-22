@@ -50,7 +50,7 @@ jobs:
       run: brew install xcbeautify
 
     - name: Clean build folder
-      run: xcodebuild clean -scheme ora -project Ora.xcodeproj
+      run: xcodebuild clean -scheme ora -project Pane.xcodeproj
     
     - name: Cache SPM dependencies
       uses: actions/cache@v3
@@ -64,3 +64,10 @@ jobs:
     
     - name: Resolve dependencies
       run: xcodebuild -resolvePackageDependencies
+
+    # Pane: actually compile the app (unsigned) so CI catches build breaks.
+    - name: Build (Debug, unsigned)
+      run: |
+        set -o pipefail
+        xcodebuild build -project Pane.xcodeproj -scheme ora -configuration Debug \
+          -destination "platform=macOS" CODE_SIGNING_ALLOWED=NO | xcbeautify

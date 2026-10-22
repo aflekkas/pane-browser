@@ -22,7 +22,7 @@ This guide covers the workflow and expectations for contributing to Ora Browser.
 git clone https://github.com/the-ora/browser.git
 cd browser
 ./scripts/setup.sh
-open Ora.xcodeproj
+open Pane.xcodeproj
 ```
 
 The setup script installs required tooling, installs git hooks, and generates the Xcode project.

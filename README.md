@@ -1,11 +1,12 @@
 <div align="center">
-  <img width="150" height="150" src="/assets/icon.png" alt="Ora Browser logo">
-  <h1>Ora Browser</h1>
-  <p>Fast, native WebKit browser for macOS.</p>
-  <a href="https://vercel.com/oss">
-  <img alt="Vercel OSS Program" src="https://vercel.com/oss/program-badge.svg" />
-</a>
+  <h1>Pane</h1>
+  <p>A minimal, native WebKit browser for macOS. Sidebar, spaces, content.</p>
 </div>
+
+> [!IMPORTANT]
+> Pane is a fork of [Ora Browser](https://github.com/the-ora/browser) (GPL-3.0), rebranded and extended
+> with features from the original [Pane](https://github.com/aflekkas/pane-browser/tree/legacy) project.
+> It is not affiliated with or endorsed by the Ora team. The rest of this README is inherited from Ora.
 <br/>
 <p align="center">
   <a href="https://www.apple.com/macos/"><img src="https://badgen.net/badge/macOS/15+/blue" alt="macOS 15+"></a>
@@ -34,10 +35,10 @@ Ora is a macOS browser built with SwiftUI, AppKit, and WebKit. The project aims 
 ## Quick Start
 
 ```bash
-git clone https://github.com/the-ora/browser.git
-cd browser
+git clone https://github.com/aflekkas/pane-browser.git
+cd pane-browser
 ./scripts/setup.sh
-open Ora.xcodeproj
+open Pane.xcodeproj
 ```
 
 The setup script installs required tooling, installs git hooks, and regenerates the Xcode project.

@@ -68,9 +68,9 @@ setup_sparkle_tools() {
 
 prime_sparkle_tools_from_xcode() {
     command -v xcodebuild >/dev/null 2>&1 || return 1
-    [[ -d "Ora.xcodeproj" ]] || return 1
+    [[ -d "Pane.xcodeproj" ]] || return 1
 
-    xcodebuild -project Ora.xcodeproj -scheme ora -resolvePackageDependencies >/dev/null 2>&1 || return 1
+    xcodebuild -project Pane.xcodeproj -scheme ora -resolvePackageDependencies >/dev/null 2>&1 || return 1
     setup_sparkle_tools
 }
 
