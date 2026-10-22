@@ -178,3 +178,18 @@ extension BrowserAuthenticationFlowTests {
         ))
     }
 }
+
+extension BrowserAuthenticationFlowTests {
+    @Test func missingTabPresentationCancelsRealAuthWithoutOpeningAnOrphanSheet() async throws {
+        let fixture = try await DownloadFlowFixture()
+        defer { fixture.stop() }
+        let harness = try DownloadFlowHarness()
+        defer { harness.close() }
+        harness.delegate.tab = nil
+        try harness.page.load(URLRequest(url: fixture.url("/auth")))
+        try await harness.wait("request reached auth fixture") { !fixture.requests.isEmpty }
+        try await harness.wait("unowned challenge resolves") { !harness.page.isLoading }
+        #expect(harness.window.attachedSheet == nil)
+        #expect(harness.page.lastCommittedURL?.path != "/auth")
+    }
+}

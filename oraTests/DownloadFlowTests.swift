@@ -65,12 +65,13 @@ struct DownloadFlowTests {
         #expect(!harness.page.hasActiveDownloads)
     }
 
-    @Test func retriesSelectOwningStoreAndLegacyScopeNeverInvokesProvider() async throws {
+    @Test(arguments: [false, true])
+    func retriesSelectOwningStoreAndLegacyScopeNeverInvokesProvider(isPrivate: Bool) async throws {
         let fixture = try await DownloadFlowFixture()
         defer { fixture.stop() }
-        let first = try DownloadFlowHarness(profile: BrowserEngineProfile(identifier: UUID(), isPrivate: false))
+        let first = try DownloadFlowHarness(profile: BrowserEngineProfile(identifier: UUID(), isPrivate: isPrivate))
         let second = try DownloadFlowHarness(
-            profile: BrowserEngineProfile(identifier: UUID(), isPrivate: false), manager: first.manager
+            profile: BrowserEngineProfile(identifier: UUID(), isPrivate: isPrivate), manager: first.manager
         )
         defer { first.close()
             second.close()
@@ -82,21 +83,32 @@ struct DownloadFlowTests {
                 .domain: "127.0.0.1", .path: "/", .name: "session", .value: identity
             ]))
             await harness.page.webView.configuration.websiteDataStore.httpCookieStore.setCookie(cookie)
-            let session = BrowserDownloadSession(page: harness.page)
-            first.manager.registerDownloadSession(session)
-            let record = try Download(originalURL: fixture.url("/attachment"), fileName: "page.html")
-            record.profileID = session.profileScopeID
-            record.status = .failed
-            // Fresh fallback traverses startDownload on the exact retained store.
-            first.manager.modelContext.insert(record)
+            // Obtain the record through the shipped navigation/download path,
+            // then exercise the no-resume-data fallback on that same record.
+            try await harness.click("attachment")
+            try await harness.wait("initial scoped download") {
+                first.manager.recentDownloads.contains {
+                    $0.profileID == harness.page.downloadProfileScopeID && $0.status == .completed
+                }
+            }
+            let record = try #require(first.manager.recentDownloads.first {
+                $0.profileID == harness.page.downloadProfileScopeID
+            })
+            record.markFailed(error: "Fixture requests a fresh retry")
+            record.resumeData = nil
             first.manager.retryDownload(record)
             try await first.wait("scoped fallback \(identity)") { record.status == .completed }
+            #expect(first.manager.isEphemeral(record) == isPrivate)
         }
         let requests = fixture.requests.filter { $0.hasPrefix("GET /attachment ") }
-        #expect(requests.count == 2)
+        #expect(requests.count == 4)
         #expect(requests[0].contains("session=first"))
-        #expect(requests[1].contains("session=second"))
+        #expect(requests[1].contains("session=first"))
+        #expect(requests[2].contains("session=second"))
+        #expect(requests[3].contains("session=second"))
         #expect(first.page.downloadProfileScopeID != second.page.downloadProfileScopeID)
+        let persisted = try first.manager.modelContext.fetch(FetchDescriptor<Download>())
+        #expect(persisted.count == (isPrivate ? 0 : 2))
         let spy = DelayedDownloadSession(profileScopeID: first.page.downloadProfileScopeID)
         first.manager.registerDownloadSession(spy)
         for scope in [nil, "unknown", "private:wrong"] as [String?] {

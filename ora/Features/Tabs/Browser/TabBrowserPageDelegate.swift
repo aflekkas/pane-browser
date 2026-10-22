@@ -206,6 +206,10 @@ final class TabBrowserPageDelegate: BrowserPageDelegate {
             completion(result.0, result.1)
         }
         MainActor.assumeIsolated {
+            guard let tab, tab.browserPage === page else {
+                once.call((.cancelAuthenticationChallenge, nil))
+                return
+            }
             // Create the owner synchronously: a navigation before Task starts
             // must still be able to retire this exact challenge.
             let operation = page.authenticationSession.begin(window: page.windowForAuthSheets)

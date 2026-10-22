@@ -4,11 +4,13 @@ import Foundation
 /// All mutations occur on WebKit's main thread.
 final class BrowserDownloadActivity {
     private var transfers: Set<UUID> = []
+    private var isRetired = false
     var isActive: Bool {
         !transfers.isEmpty
     }
 
     func begin(_ id: UUID) {
+        guard !isRetired else { return }
         transfers.insert(id)
     }
 
@@ -17,6 +19,7 @@ final class BrowserDownloadActivity {
     }
 
     func clear() {
+        isRetired = true
         transfers.removeAll()
     }
 }

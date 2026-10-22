@@ -201,6 +201,7 @@ class DownloadManager: ObservableObject {
                 expectedSize: expectedSize
             )
 
+            download.fileName = finalURL.lastPathComponent
             download.destinationURL = finalURL
             self.activeDownloadTasks[download.id] = task
             self.taskDownloads[task.id] = download
