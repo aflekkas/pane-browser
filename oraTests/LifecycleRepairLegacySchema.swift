@@ -11,6 +11,7 @@ enum LifecycleRepairLegacySchema: VersionedSchema {
     static var versionIdentifier: Schema.Version {
         Schema.Version(1, 0, 0)
     }
+
     static var models: [any PersistentModel.Type] {
         [TabContainer.self, Tab.self, Folder.self, History.self, Download.self]
     }
