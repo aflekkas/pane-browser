@@ -39,36 +39,84 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         return WindowFactory.makeMainWindow(rootView: OraRoot())
     }
 
+    /// Delivery registry for external URLs. Injectable for tests.
+    var urlRegistry = BrowserURLRecipientRegistry.shared
+
+    /// Creates a browser window when a URL arrives with no ready
+    /// recipient. Injectable for tests; production uses WindowFactory.
+    var browserWindowFactory: () -> Void = {
+        _ = WindowFactory.makeMainWindow(rootView: OraRoot())
+    }
+
     func handleIncomingURLs(_ urls: [URL]) {
-        // Launch-time URLs can arrive before any window exists and before
-        // OraRoot registers its .openURL observer in onAppear. Posting the
-        // notification then loses the URL (and getWindow() may return a
-        // different window than the observer's target, which also drops
-        // it). Queue instead; OraRoot drains the queue when it appears.
-        guard !NSApp.windows.isEmpty, let window = getWindow() else {
-            pendingOpenURLs.enqueue(urls)
-            return
-        }
         for url in urls {
-            let userInfo: [AnyHashable: Any] = ["url": url]
-            DispatchQueue.main.async {
-                NotificationCenter.default.post(name: .openURL, object: window, userInfo: userInfo)
-            }
+            urlRegistry.deliver(url, needsWindow: browserWindowFactory)
         }
     }
 
-    /// URLs received before the first window appeared. Drained once by
-    /// OraRoot on appear; live URLs keep the window-targeted path above.
-    var pendingOpenURLs = OpenURLQueue()
-
     func consumePendingOpenURLs() -> [URL] {
-        pendingOpenURLs.drain()
+        urlRegistry.consumePending()
+    }
+}
+
+/// Explicit ready-recipient delivery for external URLs.
+///
+/// A URL is delivered immediately only when a browser root has
+/// registered itself ready (OraRoot onAppear). Otherwise it is queued
+/// (FIFO, exactly once) and a browser window is requested; registration
+/// drains the queue after the recipient is in place. Window existence
+/// alone is never treated as readiness — an unrelated or not-yet-ready
+/// window cannot swallow a URL, and a closed recipient (unregistered)
+/// returns delivery to the queue instead of dropping the URL.
+final class BrowserURLRecipientRegistry {
+    static let shared = BrowserURLRecipientRegistry()
+
+    private var handler: ((URL) -> Void)?
+    private var handlerToken: UUID?
+    private var queue = OpenURLQueue()
+
+    var isReady: Bool {
+        handler != nil
+    }
+
+    var pendingCount: Int {
+        queue.urls.count
+    }
+
+    @discardableResult
+    func register(_ handler: @escaping (URL) -> Void) -> UUID {
+        let token = UUID()
+        self.handler = handler
+        handlerToken = token
+        for url in queue.drain() {
+            handler(url)
+        }
+        return token
+    }
+
+    func unregister(token: UUID) {
+        guard handlerToken == token else { return }
+        handler = nil
+        handlerToken = nil
+    }
+
+    func deliver(_ url: URL, needsWindow: () -> Void = {}) {
+        if let handler {
+            handler(url)
+            return
+        }
+        queue.enqueue([url])
+        needsWindow()
+    }
+
+    func consumePending() -> [URL] {
+        queue.drain()
     }
 }
 
 /// FIFO of external URLs waiting for the first browser window.
 struct OpenURLQueue {
-    private var urls: [URL] = []
+    private(set) var urls: [URL] = []
 
     var isEmpty: Bool {
         urls.isEmpty

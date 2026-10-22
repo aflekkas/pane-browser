@@ -223,7 +223,14 @@ final class BrowserPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
     /// before the navigation stay invalid). No-op when no committed
     /// document survives.
     private func rehandshakeSurvivingPasswordDocument() {
-        guard passwordTracker.canRehandshake(committedURL: lastCommittedURL, currentURL: webView.url) else {
+        // Compare against the tracker's surviving document URL, not
+        // `lastCommittedURL`: after an SPA pushState/replaceState the
+        // committed URL is stale (/login) while the surviving document
+        // legitimately sits on the tracked route (/other). Generation
+        // was already bumped at provisional start, so old fills stay
+        // invalid; only the fresh document context is re-registered.
+        guard passwordTracker.canRehandshake(committedURL: passwordTracker.currentDocumentURL, currentURL: webView.url)
+        else {
             return
         }
         evaluatePasswordJavaScript(

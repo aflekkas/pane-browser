@@ -31,6 +31,7 @@ struct OraRoot: View {
     let historyContext: ModelContext
     let downloadContext: ModelContext
     @State private var window: NSWindow?
+    @State private var urlRecipientToken: UUID?
 
     init(isPrivate: Bool = false) {
         _privacyMode = StateObject(wrappedValue: PrivacyMode(isPrivate: isPrivate))
@@ -112,18 +113,17 @@ struct OraRoot: View {
             .onAppear {
                 downloadManager.toastManager = toastManager
 
-                // URLs that arrived at launch, before this window (and its
-                // .openURL observer below) existed.
-                if let appDelegate = NSApp.delegate as? AppDelegate {
-                    for url in appDelegate.consumePendingOpenURLs() {
-                        tabManager.openTab(
-                            url: url,
-                            historyManager: historyManager,
-                            downloadManager: downloadManager,
-                            focusAfterOpening: true,
-                            isPrivate: privacyMode.isPrivate
-                        )
-                    }
+                // Register as the ready recipient for external URLs.
+                // Registration drains anything queued before this window
+                // existed, after the recipient (this root) is in place.
+                urlRecipientToken = BrowserURLRecipientRegistry.shared.register { url in
+                    tabManager.openTab(
+                        url: url,
+                        historyManager: historyManager,
+                        downloadManager: downloadManager,
+                        focusAfterOpening: true,
+                        isPrivate: privacyMode.isPrivate
+                    )
                 }
                 Task {
                     let containerIDs = await MainActor.run {
@@ -350,6 +350,12 @@ struct OraRoot: View {
                             }
                         }
                     }
+            }
+            .onDisappear {
+                if let urlRecipientToken {
+                    BrowserURLRecipientRegistry.shared.unregister(token: urlRecipientToken)
+                }
+                urlRecipientToken = nil
             }
     }
 }
