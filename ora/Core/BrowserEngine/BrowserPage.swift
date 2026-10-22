@@ -15,6 +15,7 @@ final class BrowserPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
     private var isReadyForNavigation = false
     private var pendingLoadRequest: URLRequest?
     private var pendingReload = false
+    private var pendingInteractionState: Data?
     /// Password-bridge per-document state (generation, token, tracked
     /// document URL). See `PasswordDocumentTracker`.
     let passwordTracker = PasswordDocumentTracker()
@@ -49,6 +50,7 @@ final class BrowserPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
         webConfiguration.preferences.javaScriptCanOpenWindowsAutomatically =
             configuration.allowsJavaScriptWindowsAutomatically
         webConfiguration.preferences.isElementFullscreenEnabled = true
+        webConfiguration.preferences.inactiveSchedulingPolicy = .suspend
         webConfiguration.mediaTypesRequiringUserActionForPlayback =
             configuration.mediaPlaybackRequiresUserAction ? .all : []
 
@@ -136,6 +138,29 @@ final class BrowserPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
 
     var estimatedProgress: Double {
         webView.estimatedProgress
+    }
+
+    /// Capture the live interaction state (history/scroll) for lifecycle
+    /// checkpoint/discard. Must run before any teardown.
+    func captureInteractionState() -> Data? {
+        TabInteractionStateCodec.validated(webView.interactionState as? Data)
+    }
+
+    /// Restore an interaction-state blob through the privacy readiness
+    /// gate: if content rules are still preparing, the blob is queued and
+    /// applied by `flushPendingNavigationIfNeeded` instead of racing them.
+    /// Returns whether WebKit already exposes a restored navigation item.
+    @discardableResult
+    func restoreInteractionState(_ data: Data) -> Bool {
+        guard TabInteractionStateCodec.isValid(data) else { return false }
+        guard isReadyForNavigation else {
+            pendingInteractionState = data
+            pendingLoadRequest = nil
+            pendingReload = false
+            return true
+        }
+        webView.interactionState = data
+        return webView.backForwardList.currentItem != nil
     }
 
     func load(_ request: URLRequest) {
@@ -255,6 +280,12 @@ final class BrowserPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
     }
 
     private func flushPendingNavigationIfNeeded() {
+        if let pendingInteractionState {
+            self.pendingInteractionState = nil
+            webView.interactionState = pendingInteractionState
+            return
+        }
+
         if let pendingLoadRequest {
             self.pendingLoadRequest = nil
             webView.load(pendingLoadRequest)

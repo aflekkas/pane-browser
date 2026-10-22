@@ -168,6 +168,7 @@ struct OraRoot: View {
                 NotificationCenter.default.addObserver(forName: .quitRequested, object: nil, queue: .main) { note in
                     guard note.object as? NSWindow === window ?? NSApp.keyWindow else { return }
                     guard window != nil else {
+                        tabManager.captureAllLiveSnapshots()
                         NSApp.reply(toApplicationShouldTerminate: true)
                         return
                     }
@@ -177,7 +178,10 @@ struct OraRoot: View {
                         iconImage: Image("OraColorLogo"),
                         confirmLabel: "Quit",
                         variant: .destructive,
-                        onConfirm: { NSApp.reply(toApplicationShouldTerminate: true) },
+                        onConfirm: {
+                            tabManager.captureAllLiveSnapshots()
+                            NSApp.reply(toApplicationShouldTerminate: true)
+                        },
                         onCancel: { NSApp.reply(toApplicationShouldTerminate: false) }
                     )
                 }

@@ -74,6 +74,7 @@ class TabManager: ObservableObject {
 
         self.modelContext.undoManager = UndoManager()
         initializeActiveContainerAndTab()
+        markRestoredTabsDiscarded()
 
         // Start automatic cleanup timer (every minute)
         startCleanupTimer()
@@ -114,9 +115,12 @@ class TabManager: ObservableObject {
         if tab.type == .pinned {
             tab.type = .normal
             tab.savedURL = nil
+            tab.userPinnedExplicitly = false
         } else {
             tab.type = .pinned
             tab.savedURL = tab.url
+            // An explicit pin action is Pane's "nailed by the user" guard.
+            tab.userPinnedExplicitly = true
         }
 
         try? modelContext.save()
@@ -137,6 +141,9 @@ class TabManager: ObservableObject {
     // MARK: - Container Public API's
 
     func moveTabToContainer(_ tab: Tab, toContainer: TabContainer) {
+        // A blob is meaningless under another container's data store:
+        // cross-container moves carry the URL, never the snapshot.
+        tab.deletePersistedInteractionState()
         tab.container = toContainer
         try? modelContext.save()
     }
@@ -388,14 +395,21 @@ class TabManager: ObservableObject {
         if shouldTrackForRestore, tab.type == .normal {
             trackRecentlyClosedTab(tab)
         }
+        if tab.type != .normal {
+            // Capture before `stopMedia` tears the page down; reading
+            // interaction state after detach can capture stale state.
+            tab.captureInteractionState()
+        }
         tab.stopMedia { [weak self] in
             DispatchQueue.main.async {
                 guard let self else { return }
                 if tab.type == .normal {
+                    tab.deletePersistedInteractionState()
                     self.modelContext.delete(tab)
                 } else {
-                    tab.isWebViewReady = false
-                    tab.destroyWebView()
+                    // Pinned/fav tabs stay as rows; discard so reopening
+                    // can restore state instead of a bare teardown.
+                    tab.discard()
                 }
                 self.mediaController.removeSession(for: tab.id)
                 try? self.modelContext.save()
@@ -480,20 +494,66 @@ class TabManager: ObservableObject {
         try? modelContext.save()
     }
 
-    /// Clean up old tabs that haven't been accessed recently to preserve memory
+    /// Two-stage idle unload (Pane spec §4, ADR 0001 — no frozen tier).
+    /// Stage 1 checkpoints interaction state at Pane's per-kind thresholds
+    /// while the page stays live; stage 2 discards (capture + deallocate)
+    /// only past the user's own `tabAliveTimeout` and only after a live
+    /// activity probe confirms no audio, MediaSession, or unsaved form
+    /// work. `removeOldTabs`/`autoClearContainerTabs` below keep their
+    /// separate user-configured *deletion* semantics.
     func cleanupOldTabs() {
-        let timeout = SettingsStore.shared.tabAliveTimeout
-        // Skip cleanup if set to "Never" (365 days)
-        guard timeout < 365 * 24 * 60 * 60 else { return }
-
+        let policy = TabLifecyclePolicy(userUnloadDelay: SettingsStore.shared.tabAliveTimeout)
+        let now = Date()
         let allContainers = fetchContainers()
         for container in allContainers {
             for tab in container.tabs {
-                if !tab.isAlive, tab.isWebViewReady, tab.id != activeTab?.id, !tab.isPlayingMedia, tab.type == .normal {
-                    tab.destroyWebView()
+                guard tab.browserPage != nil else { continue }
+                let facts = tab.lifecycleFacts(isActive: tab.id == activeTab?.id)
+                switch policy.stage(for: facts, at: now) {
+                case .checkpoint:
+                    tab.captureInteractionState()
+                case .discard:
+                    tab.discardIfAllowed(policy: policy, isActive: false, at: now)
+                case nil:
+                    break
                 }
             }
         }
+        // Release cached profiles for inactive containers whose tabs are
+        // all discarded (reference only — website data is never deleted).
+        for container in allContainers where container.id != activeContainer?.id {
+            let allDiscarded = container.tabs.allSatisfy { $0.isDiscarded || $0.browserPage == nil }
+            if TabLifecycleProfileTeardown.isEligible(
+                containerLastAccessedAt: container.lastAccessedAt,
+                isCurrentContainer: false,
+                allTabsDiscarded: allDiscarded,
+                at: now
+            ) {
+                BrowserEngine.shared.releaseProfile(identifier: container.id)
+            }
+        }
+    }
+
+    /// Session-restore bookkeeping: at launch every persisted tab starts
+    /// discarded (rows, not renderers); only materialisation clears it.
+    func markRestoredTabsDiscarded() {
+        for container in fetchContainers() {
+            for tab in container.tabs where tab.browserPage == nil {
+                tab.isDiscarded = true
+            }
+        }
+        try? modelContext.save()
+    }
+
+    /// Captures every live tab's state. The quit hook that calls this is
+    /// an integration step (see `parallel-ports/tabs-integration.md`).
+    func captureAllLiveSnapshots() {
+        for container in fetchContainers() {
+            for tab in container.tabs where tab.browserPage != nil {
+                tab.captureInteractionState()
+            }
+        }
+        try? modelContext.save()
     }
 
     /// Completely remove old normal tabs that haven't been accessed for a long time
@@ -668,6 +728,7 @@ private extension TabManager {
 
     func deleteContainerContents(_ container: TabContainer, containerId: UUID) {
         for tab in Array(container.tabs) {
+            tab.deletePersistedInteractionState()
             if tab.isWebViewReady {
                 tab.destroyWebView()
             }
