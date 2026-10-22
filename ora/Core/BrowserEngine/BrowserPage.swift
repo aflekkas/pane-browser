@@ -5,12 +5,12 @@ import Foundation
 final class BrowserPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler {
     weak var delegate: BrowserPageDelegate?
 
-    private let webView: WKWebView
+    let webView: WKWebView
     private let messageNames: [String]
     private let isolatedMessageNames: Set<String>
-    private var originalURL: URL?
+    var originalURL: URL?
     private(set) var lastCommittedURL: URL?
-    private(set) var isDownloadNavigation = false
+    var isDownloadNavigation = false
     /// Profile (container/Space) this page belongs to; scopes certificate
     /// exceptions and download resume. Retained from init.
     let profileIdentifier: UUID
@@ -18,22 +18,6 @@ final class BrowserPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
 
     /// One app-run session identifier for certificate-exception scope.
     private static let appSessionID = UUID().uuidString
-
-    var certificateExceptionScope: CertificateExceptionScope {
-        CertificateExceptionScope(
-            profileID: isPrivateProfile ? "private:\(profileIdentifier.uuidString)" : profileIdentifier.uuidString,
-            sessionID: Self.appSessionID
-        )
-    }
-
-    /// Scope string stamped onto download tasks for resume checks.
-    var downloadProfileScopeID: String {
-        isPrivateProfile ? "private:\(profileIdentifier.uuidString)" : profileIdentifier.uuidString
-    }
-
-    var windowForAuthSheets: NSWindow? {
-        webView.window
-    }
 
     private var isReadyForNavigation = false
     private var pendingLoadRequest: URLRequest?
@@ -308,25 +292,6 @@ final class BrowserPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
         webView.removeFromSuperview()
     }
 
-    /// Resume via WebKit; the new download re-enters through the normal
-    /// `didStartDownload` path. The created task carries this page's
-    /// profile scope, or `DownloadManager` refuses the resume.
-    func resumeDownload(fromResumeData resumeData: Data, completion: @escaping (BrowserDownloadTask?) -> Void) {
-        let once = OnceCompletion(completion)
-        webView.resumeDownload(fromResumeData: resumeData) { [weak self] download in
-            guard let self, let download else {
-                once.call(nil)
-                return
-            }
-            once.call(BrowserDownloadTask(
-                download: download,
-                originalURL: download.originalRequest?.url ?? self.webView.url ?? URL(string: "about:blank")!,
-                pageURL: self.webView.url,
-                profileScopeID: self.downloadProfileScopeID
-            ))
-        }
-    }
-
     private func flushPendingNavigationIfNeeded() {
         if let pendingInteractionState {
             self.pendingInteractionState = nil
@@ -526,25 +491,6 @@ final class BrowserPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
         originalURL = nil
     }
 
-    func webView(
-        _ webView: WKWebView,
-        didReceive challenge: URLAuthenticationChallenge,
-        completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
-    ) {
-        // Route through the delegate (certificate exceptions + HTTP auth
-        // live there); the default implementation is performDefaultHandling,
-        // so no host-only bypass survives. Exactly-once via OnceCompletion.
-        let once = OnceCompletion<(
-            disposition: URLSession.AuthChallengeDisposition,
-            credential: URLCredential?
-        )> { result in
-            completionHandler(result.disposition, result.credential)
-        }
-        delegate?.browserPage(self, respondTo: challenge, scope: certificateExceptionScope) { disposition, credential in
-            once.call((disposition: disposition, credential: credential))
-        }
-    }
-
     @available(macOS 11.3, *)
     func webView(
         _ webView: WKWebView,
@@ -567,31 +513,6 @@ final class BrowserPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
             isLoading: false
         )
         decisionHandler(.download)
-    }
-
-    @available(macOS 11.3, *)
-    func webView(_ webView: WKWebView, navigationResponse: WKNavigationResponse, didBecome download: WKDownload) {
-        guard let downloadURL = navigationResponse.response.url else { return }
-        let task = BrowserDownloadTask(
-            download: download,
-            originalURL: downloadURL,
-            pageURL: webView.url,
-            profileScopeID: downloadProfileScopeID
-        )
-        delegate?.browserPage(self, didStartDownload: task)
-        isDownloadNavigation = false
-        originalURL = nil
-    }
-
-    @available(macOS 11.3, *)
-    func webView(_ webView: WKWebView, navigationAction: WKNavigationAction, didBecome download: WKDownload) {
-        let task = BrowserDownloadTask(
-            download: download,
-            originalURL: navigationAction.request.url ?? webView.url ?? URL(string: "about:blank")!,
-            pageURL: webView.url,
-            profileScopeID: downloadProfileScopeID
-        )
-        delegate?.browserPage(self, didStartDownload: task)
     }
 
     func webView(

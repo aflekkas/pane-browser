@@ -121,11 +121,12 @@ enum BrowserAuthHandler {
         alert.addButton(withTitle: "Go Back")
         alert.addButton(withTitle: "Continue for This Session")
         if let window {
-            return await withCheckedContinuation { continuation in
+            let response: NSApplication.ModalResponse = await withCheckedContinuation { continuation in
                 let once = OnceCompletion<NSApplication.ModalResponse>(continuation.resume(returning:))
                 alert.beginSheetModal(for: window) { response in once.call(response) }
-            } == .alertSecondButtonReturn
+            }
+            return response == NSApplication.ModalResponse.alertSecondButtonReturn
         }
-        return alert.runModal() == .alertSecondButtonReturn
+        return alert.runModal() == NSApplication.ModalResponse.alertSecondButtonReturn
     }
 }

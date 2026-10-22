@@ -47,7 +47,7 @@ struct CertificateExceptionsScopedTests {
         #expect(!store.allowForSession(host: "example.com", port: 443, fingerprint: "not-a-fingerprint", scope: scopeA))
         #expect(!store.allowForSession(host: "", port: 443, fingerprint: fingerprintA, scope: scopeA))
         #expect(!store.isAllowed(host: "example.com", port: 443, fingerprint: "", scope: scopeA))
-        #expect(store.count == 0)
+        #expect(store.isEmpty)
 
         store.allowForSession(host: "example.com", port: 443, fingerprint: fingerprintA, scope: scopeA)
         store.allowForSession(host: "example.com", port: 443, fingerprint: fingerprintA, scope: scopeB)
@@ -55,7 +55,7 @@ struct CertificateExceptionsScopedTests {
         #expect(!store.isAllowed(host: "example.com", port: 443, fingerprint: fingerprintA, scope: scopeA))
         #expect(store.isAllowed(host: "example.com", port: 443, fingerprint: fingerprintA, scope: scopeB))
         store.clearAll()
-        #expect(store.count == 0)
+        #expect(store.isEmpty)
     }
 
     @Test func missingTrustFailsClosed() {
