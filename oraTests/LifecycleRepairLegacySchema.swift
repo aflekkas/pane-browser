@@ -27,11 +27,12 @@ enum LifecycleRepairLegacySchema: VersionedSchema {
         @Relationship var history: [History] = []
 
         init(id: UUID) {
+            let timestamp = Date(timeIntervalSince1970: 1_700_000_000)
             self.id = id
             name = "PR1 space"
             emoji = "P"
-            createdAt = Date(timeIntervalSince1970: 1_700_000_000)
-            lastAccessedAt = createdAt
+            createdAt = timestamp
+            lastAccessedAt = timestamp
         }
     }
 
@@ -51,13 +52,14 @@ enum LifecycleRepairLegacySchema: VersionedSchema {
         @Relationship(inverse: \TabContainer.tabs) var container: TabContainer
 
         init(id: UUID, url: URL, container: TabContainer) {
+            let timestamp = container.createdAt
             self.id = id
             self.url = url
             urlString = url.absoluteString
             savedURL = url
             title = "PR1 pinned tab"
-            createdAt = container.createdAt
-            lastAccessedAt = createdAt
+            createdAt = timestamp
+            lastAccessedAt = timestamp
             type = .pinned
             order = 7
             self.container = container
@@ -91,13 +93,14 @@ enum LifecycleRepairLegacySchema: VersionedSchema {
         @Relationship(inverse: \TabContainer.history) var container: TabContainer?
 
         init(url: URL, container: TabContainer) {
+            let timestamp = container.createdAt
             id = UUID()
             self.url = url
             urlString = url.absoluteString
             title = "PR1 visit"
             faviconURL = url
-            createdAt = container.createdAt
-            lastAccessedAt = createdAt
+            createdAt = timestamp
+            lastAccessedAt = timestamp
             visitCount = 4
             self.container = container
         }
