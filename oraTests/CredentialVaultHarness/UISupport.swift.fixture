@@ -1,0 +1,84 @@
+// Typecheck-only app dependencies; all SwiftUI/AppKit/SwiftData/Security types are real SDK types.
+import AppKit
+import SwiftData
+import SwiftUI
+
+// CLT lacks SwiftDataMacros: manually conform the APP model stub to the REAL SDK protocol.
+final class TabContainer: PersistentModel {
+    var persistentBackingData: any BackingData<TabContainer> {
+        get { fatalError("typecheck only") }
+        set {}
+    }
+    static var schemaMetadata: [Schema.PropertyMetadata] { [] }
+    init(backingData: any BackingData<TabContainer>) {}
+
+    var id: UUID = UUID()
+    var name: String = "test"
+    var emoji: String = ""
+    var lastAccessedAt: Date = Date()
+    init() {}
+}
+extension ModelConfiguration {
+    static func createOraContainer(isPrivate: Bool) throws -> ModelContainer { try ModelContainer(for: TabContainer.self) }
+}
+struct VaultCheckTheme { var background = Color.white; var mutedForeground = Color.gray }
+private struct VaultCheckThemeKey: EnvironmentKey { static let defaultValue = VaultCheckTheme() }
+extension EnvironmentValues {
+    var theme: VaultCheckTheme {
+        get { self[VaultCheckThemeKey.self] }
+        set { self[VaultCheckThemeKey.self] = newValue }
+    }
+}
+extension View { func withTheme() -> some View { self } }
+struct OraButton: View {
+    enum Variant { case outline }
+    var label: String
+    var variant: Variant
+    var isDisabled: Bool
+    var leadingIcon: String
+    var action: () -> Void
+    var body: some View { Button(label, action: action).disabled(isDisabled) }
+}
+struct OraIcons: View {
+    enum Icon { case copy }
+    enum Size { case custom(CGFloat) }
+    var icon: Icon
+    var size: Size
+    var color: Color
+    var body: some View { Image(systemName: "document").foregroundStyle(color) }
+}
+struct SiteFaviconView: View {
+    var host: String
+    var size: CGFloat
+    var cornerRadius: CGFloat
+    var body: some View { Color.clear }
+}
+struct PasswordDocumentContext: Equatable { var documentToken: String }
+final class BrowserPage {
+    func currentPasswordContext() -> PasswordDocumentContext? { nil }
+}
+final class Tab {
+    var browserPage: BrowserPage?
+    var passwordOverlayState: PasswordAutofillOverlayState?
+    var passwordTriggerOverlayState: PasswordAutofillOverlayState?
+    var isPrivate = false
+    var container = TabContainer()
+    var pageWindow: NSWindow?
+    func evaluatePasswordJavaScript(_ script: String, completion: ((Any?, Error?) -> Void)? = nil) {}
+}
+final class SettingsStore: ObservableObject {
+    static let shared = SettingsStore()
+    @Published var passwordManagerProvider = PasswordManagerProviderKind.ora
+    @Published var passwordsEnabled = true
+    @Published var passwordAutofillEnabled = true
+    @Published var passwordAutofillSubmitEnabled = true
+    @Published var passwordSavePromptsEnabled = true
+    func allowsPasswordSavePrompts(for host: String) -> Bool { true }
+    func suppressPasswordSavePrompts(for host: String) {}
+}
+final class AppDelegate: NSObject, NSApplicationDelegate { func getWindow() -> NSWindow? { nil } }
+
+struct SettingsCard<Content: View>: View {
+    @ViewBuilder var content: () -> Content
+    var body: some View { content() }
+}

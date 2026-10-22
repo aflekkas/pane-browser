@@ -1,188 +1,12 @@
 import AppKit
 import Foundation
 
-enum PasswordFormAction: String, Codable {
-    case login
-    case createAccount
-}
-
-enum PasswordAutofillFieldKind: String, Codable {
-    case email
-    case password
-    case username
-}
-
-enum PasswordAutofillKeyCommand: String, Codable {
-    case moveUp
-    case moveDown
-    case activate
-    case dismiss
-}
-
-struct PasswordBridgeRect: Codable, Equatable {
-    let originX: Double
-    let originY: Double
-    let width: Double
-    let height: Double
-
-    enum CodingKeys: String, CodingKey {
-        case originX = "x"
-        case originY = "y"
-        case width
-        case height
-    }
-
-    var cgRect: CGRect {
-        CGRect(x: originX, y: originY, width: width, height: height)
-    }
-}
-
-struct PasswordBridgeFocusPayload: Codable, Equatable {
-    let fieldID: String
-    let hostname: String
-    let action: PasswordFormAction
-    let fieldKind: PasswordAutofillFieldKind
-    let usernameFieldID: String?
-    let passwordFieldIDs: [String]
-    let rect: PasswordBridgeRect
-}
-
-struct PasswordBridgeSubmitPayload: Codable, Equatable {
-    let hostname: String
-    let username: String
-    let password: String
-    let action: PasswordFormAction
-}
-
-struct PasswordBridgeEvent: Codable, Equatable {
-    let type: String
-    let focus: PasswordBridgeFocusPayload?
-    let submit: PasswordBridgeSubmitPayload?
-    let keyCommand: PasswordAutofillKeyCommand?
-    let fieldID: String?
-    let rect: PasswordBridgeRect?
-}
-
-struct PasswordFillRequest: Codable {
-    let usernameFieldID: String?
-    let passwordFieldIDs: [String]
-    let username: String?
-    let password: String
-    let highlightColor: String
-    let submitAfterFill: Bool
-    /// Per-document token from the captured `PasswordDocumentContext`. The
-    /// isolated script refuses to write when it does not match its own
-    /// document, so a fill minted before a navigation/reload is inert.
-    let documentToken: String
-}
-
-enum PasswordAutofillSuggestion: Identifiable, Equatable {
-    case generatedPassword(host: String, password: String)
-    case savedCredential(SavedPasswordSummary)
-    case email(PasswordEmailSuggestion)
-
-    var id: String {
-        switch self {
-        case let .generatedPassword(_, password):
-            return "generated-\(password)"
-        case let .savedCredential(entry):
-            return "saved-\(entry.id)"
-        case let .email(suggestion):
-            return "email-\(suggestion.id)"
-        }
-    }
-
-    var host: String {
-        switch self {
-        case let .generatedPassword(host, _):
-            return host
-        case let .savedCredential(entry):
-            return entry.host
-        case let .email(suggestion):
-            return suggestion.host
-        }
-    }
-}
-
-struct PasswordAutofillOverlayState: Equatable {
-    let focus: PasswordBridgeFocusPayload
-    let savedPasswordEntries: [SavedPasswordSummary]
-    let emailSuggestions: [PasswordEmailSuggestion]
-    let generatedPassword: String?
-    let selectedSuggestionIndex: Int
-    /// Native document binding captured when the overlay was presented.
-    /// Compared (never trusted from JS) again at fill time. Defaulted so
-    /// pure suggestion-resolution constructions stay context-free; only
-    /// the presented overlay carries one, and fills fail closed without it.
-    var fillContext: PasswordDocumentContext?
-
-    init(
-        focus: PasswordBridgeFocusPayload,
-        savedPasswordEntries: [SavedPasswordSummary],
-        emailSuggestions: [PasswordEmailSuggestion],
-        generatedPassword: String?,
-        selectedSuggestionIndex: Int,
-        fillContext: PasswordDocumentContext? = nil
-    ) {
-        self.focus = focus
-        self.savedPasswordEntries = savedPasswordEntries
-        self.emailSuggestions = emailSuggestions
-        self.generatedPassword = generatedPassword
-        self.selectedSuggestionIndex = selectedSuggestionIndex
-        self.fillContext = fillContext
-    }
-
-    var suggestions: [PasswordAutofillSuggestion] {
-        var items: [PasswordAutofillSuggestion] = []
-
-        if let generatedPassword {
-            items.append(.generatedPassword(host: focus.hostname, password: generatedPassword))
-        }
-
-        items.append(contentsOf: savedPasswordEntries.prefix(4).map(PasswordAutofillSuggestion.savedCredential))
-        items.append(contentsOf: emailSuggestions.prefix(4).map(PasswordAutofillSuggestion.email))
-
-        return items
-    }
-}
-
-struct PasswordSavePromptDetails: Equatable {
-    let title: String
-    let message: String
-    let confirmButtonTitle: String
-    let neverButtonTitle: String
-    let showsSecurityWarning: Bool
-}
-
-/// Injectable operations for `PasswordAutofillCoordinator.autofill` only,
-/// so tests can control the async authentication delay (and simulate
-/// navigation mid-auth) without OS auth or the Keychain. The defaults
-/// delegate to the shared password service; every other service call the
-/// coordinator makes is unchanged.
-struct PasswordAutofillOperations: Sendable {
-    let authenticate: @Sendable (String) async -> Bool
-    let revealPassword: @Sendable (SavedPasswordSummary) throws -> String
-    let markUsed: @Sendable (SavedPasswordSummary) -> Void
-
-    static let live = PasswordAutofillOperations(
-        authenticate: { reason in
-            await PasswordManagerService.shared.authenticate(reason: reason)
-        },
-        revealPassword: { entry in
-            try PasswordManagerService.shared.revealPassword(for: entry)
-        },
-        markUsed: { entry in
-            PasswordManagerService.shared.markUsed(entry)
-        }
-    )
-}
-
 final class PasswordAutofillCoordinator {
     weak var tab: Tab?
 
-    private let passwordManager = PasswordManagerService.shared
-    private let providers = PasswordManagerProviderRegistry.shared
-    private let settings = SettingsStore.shared
+    let passwordManager: PasswordManagerService
+    let providers = PasswordManagerProviderRegistry.shared
+    let settings = SettingsStore.shared
     private let decoder = JSONDecoder()
     private let operations: PasswordAutofillOperations
 
@@ -190,12 +14,14 @@ final class PasswordAutofillCoordinator {
 
     init(
         tab: Tab,
+        passwordManager: PasswordManagerService = .shared,
         authenticate: @escaping @Sendable (String) async -> Bool = PasswordAutofillOperations.live.authenticate,
         revealPassword: @escaping @Sendable (SavedPasswordSummary) throws -> String = PasswordAutofillOperations.live
             .revealPassword,
         markUsed: @escaping @Sendable (SavedPasswordSummary) -> Void = PasswordAutofillOperations.live.markUsed
     ) {
         self.tab = tab
+        self.passwordManager = passwordManager
         operations = PasswordAutofillOperations(
             authenticate: authenticate,
             revealPassword: revealPassword,
@@ -280,17 +106,13 @@ final class PasswordAutofillCoordinator {
             let authenticated = await operations.authenticate(
                 "Autofill the saved password for \(entry.displayUsername) on \(entry.host)"
             )
-            guard authenticated,
-                  let password = try? operations.revealPassword(entry)
-            else {
-                return
-            }
-
+            guard authenticated else { return }
             await MainActor.run {
-                // Re-validate after the async auth prompt: if the tab
-                // navigated away from the overlay's origin, the credential
-                // must not follow it.
-                guard self.isFillContextValid(for: overlay) else {
+                // Revalidate BEFORE reading a secret as well as before dispatching it.
+                guard self.isFillContextValid(for: overlay),
+                      let password = try? self.operations.revealPassword(entry),
+                      self.isFillContextValid(for: overlay)
+                else {
                     self.clearAutofillState()
                     return
                 }
@@ -378,7 +200,12 @@ final class PasswordAutofillCoordinator {
               provider.usesBuiltInOverlay,
               tab?.isPrivate == false,
               let pageURL,
-              let normalizedHost = PasswordManagerService.normalizedHost(from: pageURL)
+              let normalizedHost = PasswordManagerService.normalizedHost(from: pageURL),
+              // Vault policy: nothing is offered on origins the vault cannot
+              // key (http off loopback). The vault would return no matches
+              // anyway; ending here also withholds generated-password and
+              // email suggestions that imply a save will follow.
+              CredentialVault.originKey(for: pageURL) != nil
         else {
             clearAutofillState()
             return
@@ -433,111 +260,6 @@ final class PasswordAutofillCoordinator {
         {
             tab?.passwordOverlayState = overlayState(overlay, updatingRectTo: rect)
         }
-    }
-
-    private func handleSubmit(_ payload: PasswordBridgeSubmitPayload, pageURL: URL?) {
-        let provider = providers.descriptor(for: settings.passwordManagerProvider)
-        guard settings.passwordsEnabled,
-              settings.passwordSavePromptsEnabled,
-              provider.usesBuiltInVault,
-              tab?.isPrivate == false,
-              let pageURL,
-              let normalizedHost = PasswordManagerService.normalizedHost(from: pageURL)
-        else {
-            return
-        }
-
-        guard settings.allowsPasswordSavePrompts(for: normalizedHost) else {
-            return
-        }
-
-        let trimmedUsername = payload.username.trimmingCharacters(in: .whitespacesAndNewlines)
-        let trimmedPassword = payload.password.trimmingCharacters(in: .whitespacesAndNewlines)
-
-        guard payload.action == .login || payload.action == .createAccount,
-              !trimmedPassword.isEmpty
-        else {
-            return
-        }
-
-        let matchingEntry = passwordManager
-            .matchingEntries(for: pageURL, containerID: tab?.container.id)
-            .first { $0.username == trimmedUsername }
-
-        if let matchingEntry,
-           let storedPassword = try? passwordManager.revealPassword(for: matchingEntry),
-           storedPassword == trimmedPassword
-        {
-            return
-        }
-
-        let prompt = Self.savePromptDetails(
-            for: pageURL,
-            username: trimmedUsername,
-            normalizedHost: normalizedHost,
-            isUpdate: matchingEntry != nil
-        )
-
-        let saveAction: () -> Void = {
-            _ = try? self.passwordManager.upsertCredential(
-                for: pageURL,
-                username: trimmedUsername,
-                password: trimmedPassword,
-                containerID: self.tab?.container.id
-            )
-        }
-
-        Task { @MainActor [weak self] in
-            self?.presentSavePrompt(
-                prompt,
-                normalizedHost: normalizedHost,
-                saveAction: saveAction
-            )
-        }
-    }
-
-    @MainActor
-    private func presentSavePrompt(
-        _ prompt: PasswordSavePromptDetails,
-        normalizedHost: String,
-        saveAction: @escaping () -> Void
-    ) {
-        guard let window = presentationWindow() else {
-            return
-        }
-
-        let alert = NSAlert()
-        alert.alertStyle = prompt.showsSecurityWarning ? .warning : .informational
-        alert.messageText = prompt.title
-        alert.informativeText = prompt.message
-        alert.addButton(withTitle: prompt.confirmButtonTitle)
-        alert.addButton(withTitle: "Not Now")
-        alert.addButton(withTitle: prompt.neverButtonTitle)
-        alert.beginSheetModal(for: window) { response in
-            switch response {
-            case .alertFirstButtonReturn:
-                saveAction()
-            case .alertThirdButtonReturn:
-                self.settings.suppressPasswordSavePrompts(for: normalizedHost)
-            default:
-                break
-            }
-        }
-    }
-
-    @MainActor
-    private func presentationWindow() -> NSWindow? {
-        if let window = tab?.pageWindow {
-            return window
-        }
-
-        if let appDelegate = NSApp.delegate as? AppDelegate {
-            return appDelegate.getWindow()
-        }
-
-        return NSApp.keyWindow
-            ?? NSApp.windows.first(where: { $0.isVisible })
-            ?? NSApp.windows.first
     }
 
     private func scheduleDismissOverlay() {
@@ -617,81 +339,6 @@ final class PasswordAutofillCoordinator {
     private func setOverlayKeyboardActive(_ isActive: Bool) {
         guard tab?.browserPage != nil else { return }
         evaluate(scriptMethod: "setOverlayKeyboardActive", payload: isActive)
-    }
-
-    static func savePromptDetails(
-        for pageURL: URL,
-        username: String,
-        normalizedHost: String,
-        isUpdate: Bool
-    ) -> PasswordSavePromptDetails {
-        let accountLabel = username.isEmpty ? normalizedHost : username
-        let isInsecurePage = pageURL.scheme?.localizedCaseInsensitiveCompare("http") == .orderedSame
-
-        if isInsecurePage {
-            let actionTitle = isUpdate ? "Update Password on Insecure Page" : "Save Password on Insecure Page"
-            let buttonTitle = isUpdate ? "Update Anyway" : "Save Anyway"
-            let actionVerb = isUpdate ? "update" : "save"
-            return PasswordSavePromptDetails(
-                title: actionTitle,
-                message: "This page uses an insecure connection (http://), so other people on the network may be able to read the password. Do you still want to \(actionVerb) the password for \(accountLabel)?",
-                confirmButtonTitle: buttonTitle,
-                neverButtonTitle: "Never on This Site",
-                showsSecurityWarning: true
-            )
-        }
-
-        let title = isUpdate ? "Update Password" : "Save Password"
-        let message = isUpdate
-            ? "Update the saved password for \(accountLabel)?"
-            : "Save the password for \(accountLabel)?"
-
-        return PasswordSavePromptDetails(
-            title: title,
-            message: message,
-            confirmButtonTitle: title,
-            neverButtonTitle: "Never on This Site",
-            showsSecurityWarning: false
-        )
-    }
-
-    static func resolveSuggestions(
-        for focus: PasswordBridgeFocusPayload,
-        matchingEntries: [SavedPasswordSummary],
-        emailSuggestions: [PasswordEmailSuggestion],
-        generatedPassword: String?
-    ) -> PasswordAutofillOverlayState {
-        let savedPasswordEntries: [SavedPasswordSummary]
-        let filteredEmailSuggestions: [PasswordEmailSuggestion]
-        let filteredGeneratedPassword: String?
-
-        switch (focus.action, focus.fieldKind) {
-        case (.createAccount, .password):
-            savedPasswordEntries = []
-            filteredEmailSuggestions = []
-            filteredGeneratedPassword = generatedPassword
-        case (.createAccount, .email):
-            savedPasswordEntries = []
-            filteredEmailSuggestions = emailSuggestions
-            filteredGeneratedPassword = nil
-        case (.createAccount, .username):
-            savedPasswordEntries = []
-            filteredEmailSuggestions = []
-            filteredGeneratedPassword = nil
-        case (.login, _):
-            savedPasswordEntries = matchingEntries
-            filteredEmailSuggestions = []
-            filteredGeneratedPassword = nil
-        }
-
-        return PasswordAutofillOverlayState(
-            focus: focus,
-            savedPasswordEntries: savedPasswordEntries,
-            emailSuggestions: filteredEmailSuggestions,
-            generatedPassword: filteredGeneratedPassword,
-            selectedSuggestionIndex: (savedPasswordEntries.isEmpty && filteredEmailSuggestions
-                .isEmpty && filteredGeneratedPassword == nil) ? -1 : 0
-        )
     }
 }
 

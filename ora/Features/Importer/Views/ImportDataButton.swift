@@ -94,10 +94,10 @@ struct ImportDataButton: View {
                 importArc()
             }
             Button("Safari") {
-                // importSafari()
+                Task { @MainActor in openPasswordsWindow() }
             }
             Button("Chrome") {
-                // importChrome()
+                Task { @MainActor in openPasswordsWindow() }
             }
         }
     }

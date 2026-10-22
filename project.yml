@@ -93,25 +93,9 @@ targets:
         LSMinimumSystemVersion: "15.0"
         LSApplicationCategoryType: public.app-category.web-browser
 
-    entitlements:
-      path: ora/Info/ora.entitlements
-      properties:
-        com.apple.security.app-sandbox: true
-        com.apple.security.assets.movies.read-only: true
-        com.apple.security.assets.music.read-only: true
-        com.apple.security.assets.pictures.read-only: true
-        com.apple.security.cs.allow-jit: true
-        com.apple.security.device.audio-input: true
-        com.apple.security.device.camera: true
-        com.apple.security.files.downloads.read-write: true
-        com.apple.security.files.user-selected.read-write: true
-        com.apple.security.network.client: true
-        com.apple.security.print: true
-        com.apple.security.temporary-exception.mach-lookup.global-name:
-          - "$(PRODUCT_BUNDLE_IDENTIFIER)-spks"
-          - "$(PRODUCT_BUNDLE_IDENTIFIER)-spki"
-        com.apple.developer.web-browser: true
-        com.apple.developer.web-browser.public-key-credential: true
+    # Entitlement files are maintained directly. XcodeGen's entitlements generator
+    # overrides CODE_SIGN_ENTITLEMENTS in every configuration, including Debug.
+    # The per-configuration paths below keep the proposed access group Release-only.
 
     settings:
       base:
@@ -152,12 +136,17 @@ targets:
     deploymentTarget: "15.0"
     sources:
       - path: oraTests
+        excludes:
+          - "CredentialVaultHarness/**"
     dependencies:
       - target: ora
     settings:
       base:
         TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Pane.app/Contents/MacOS/Pane"
         BUNDLE_LOADER: "$(TEST_HOST)"
+        # Disable Info.plist discovery in excluded local harness build products.
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_FILE: ""
 
 schemes:
   ora:

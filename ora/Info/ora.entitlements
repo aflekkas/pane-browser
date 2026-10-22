@@ -6,6 +6,10 @@
 	<true/>
 	<key>com.apple.developer.web-browser.public-key-credential</key>
 	<true/>
+	<key>keychain-access-groups</key>
+	<array>
+		<string>$(AppIdentifierPrefix)com.aflekkas.pane</string>
+	</array>
 	<key>com.apple.security.app-sandbox</key>
 	<true/>
 	<key>com.apple.security.assets.movies.read-only</key>

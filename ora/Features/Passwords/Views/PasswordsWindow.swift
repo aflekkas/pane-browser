@@ -1,6 +1,7 @@
 import AppKit
 import SwiftData
 import SwiftUI
+import UniformTypeIdentifiers
 
 @MainActor
 func openPasswordsWindow() {
@@ -61,6 +62,7 @@ private final class PasswordsWindowController: NSObject, NSWindowDelegate {
             return
         }
 
+        PasswordManagerService.shared.invalidateAuthenticatedContext()
         windowController = nil
     }
 }
@@ -82,28 +84,29 @@ private struct PasswordsWindowUnavailableView: View {
     }
 }
 
-private struct PasswordsWindowView: View {
+struct PasswordsWindowView: View {
     @Query(sort: \TabContainer.lastAccessedAt, order: .reverse) var containers: [TabContainer]
 
-    @Environment(\.theme) private var theme
-    @StateObject private var passwordManager = PasswordManagerService.shared
+    @Environment(\.theme) var theme
+    @StateObject var passwordManager = PasswordManagerService.shared
 
-    @State private var searchText = ""
-    @State private var isUnlocked = false
-    @State private var isAuthenticating = false
-    @State private var selectedContainerId: UUID?
-    @State private var revealedPasswordIDs: [String: String] = [:]
-    @State private var pendingDelete: SavedPasswordSummary?
+    @State var vaultPresentation = PasswordVaultPresentation()
+    @State var searchText = ""
+    @State var selectedContainerId: UUID?
+    @State var pendingDelete: SavedPasswordSummary?
+    @State var importTask: Task<Void, Never>?
+    @State var isImporting = false
+    @State var importReport: CredentialImportReport?
 
-    private var selectedContainer: TabContainer? {
+    var selectedContainer: TabContainer? {
         containers.first { $0.id == selectedContainerId } ?? containers.first
     }
 
-    private var visibleEntries: [SavedPasswordSummary] {
+    var visibleEntries: [SavedPasswordSummary] {
         passwordManager.entries(for: selectedContainer?.id)
     }
 
-    private var filteredEntries: [SavedPasswordSummary] {
+    var filteredEntries: [SavedPasswordSummary] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else { return visibleEntries }
 
@@ -123,7 +126,7 @@ private struct PasswordsWindowView: View {
 
                 if containers.isEmpty {
                     emptyState(message: "Create a space to start storing passwords.")
-                } else if isUnlocked {
+                } else if vaultPresentation.isUnlocked {
                     spacePickerRow
 
                     TextField("Search saved passwords", text: $searchText)
@@ -160,6 +163,9 @@ private struct PasswordsWindowView: View {
         .onDisappear {
             lockVault()
         }
+        .onReceive(passwordManager.$authenticationRevision.dropFirst()) { revision in
+            clearVaultState(replacement: revision)
+        }
         .alert("Delete saved password?", isPresented: Binding(
             get: { pendingDelete != nil },
             set: {
@@ -184,27 +190,78 @@ private struct PasswordsWindowView: View {
         }
     }
 
-    private var header: some View {
-        HStack(alignment: .top) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Saved Passwords")
-                    .font(.title2.weight(.semibold))
-                Text("\(visibleEntries.count) item\(visibleEntries.count == 1 ? "" : "s")")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+    var header: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Saved Passwords")
+                        .font(.title2.weight(.semibold))
+                    Text("\(visibleEntries.count) item\(visibleEntries.count == 1 ? "" : "s")")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                if vaultPresentation.isUnlocked {
+                    Button(isImporting ? "Importing…" : "Import Passwords…") {
+                        importPasswords()
+                    }
+                    .disabled(isImporting)
+                    Button("Migrate Legacy Passwords…") {
+                        passwordManager.performLegacyMigrationIfNeeded()
+                    }
+                    .disabled(isImporting)
+                    Button("Lock") {
+                        lockVault()
+                    }
+                }
             }
 
-            Spacer()
-
-            if isUnlocked {
-                Button("Lock") {
-                    lockVault()
-                }
+            protectionStatus
+            migrationNotice
+            if let importReport {
+                Text("Last import: \(importReport.importedCount) saved; \(importReport.skipped.count) skipped. "
+                    + importReport.skipped.prefix(3).joined(separator: " "))
+                    .font(.caption)
             }
         }
     }
 
-    private var spacePickerRow: some View {
+    /// ADR 0007: the vault's actual protection is stated wherever the vault
+    /// is surfaced. The degraded state is prominent, never quiet, and this
+    /// view never claims Touch ID protection the probe did not confirm.
+    var protectionStatus: some View {
+        let protection = passwordManager.vaultProtection
+        return HStack(alignment: .top, spacing: 6) {
+            Image(systemName: protection == .userPresence ? "touchid" : "exclamationmark.triangle.fill")
+                .foregroundStyle(protection == .userPresence ? Color.secondary : Color.orange)
+            Text(protection.userFacingDescription)
+                .font(.caption)
+                .foregroundStyle(protection == .userPresence ? Color.secondary : Color.primary)
+        }
+        .padding(protection == .userPresence ? 0 : 8)
+        .background(
+            protection == .userPresence
+                ? Color.clear
+                : Color.orange.opacity(0.12),
+            in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+        )
+    }
+
+    @ViewBuilder
+    var migrationNotice: some View {
+        if let report = passwordManager.lastMigrationReport, !report.isEmpty {
+            Text(
+                "\(report.skipped.count) skipped; \(report.failedCount) failed. Legacy passwords retained where uncertain: "
+                    + report.skipped.prefix(3).joined(separator: "; ")
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+    }
+
+    var spacePickerRow: some View {
         HStack {
             Text("Space")
                 .font(.subheadline.weight(.medium))
@@ -228,7 +285,7 @@ private struct PasswordsWindowView: View {
         }
     }
 
-    private var lockedVaultState: some View {
+    var lockedVaultState: some View {
         VStack(spacing: 18) {
             Image(systemName: "lock.fill")
                 .font(.system(size: 56, weight: .regular))
@@ -246,9 +303,9 @@ private struct PasswordsWindowView: View {
             }
 
             OraButton(
-                label: isAuthenticating ? "Unlocking..." : "Unlock Passwords",
+                label: vaultPresentation.isAuthenticating ? "Unlocking..." : "Unlock Passwords",
                 variant: .outline,
-                isDisabled: isAuthenticating,
+                isDisabled: vaultPresentation.isAuthenticating,
                 leadingIcon: passwordManager.canUseBiometricAuthentication() ? "touchid" : "lock.open"
             ) {
                 unlockVault()
@@ -257,209 +314,93 @@ private struct PasswordsWindowView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
     }
 
-    private var passwordsTable: some View {
-        GeometryReader { geometry in
-            let contentWidth = max(minimumTableContentWidth, geometry.size.width)
-            let actionsColumnWidth = max(52, contentWidth - 784)
-
-            ScrollView(.horizontal, showsIndicators: true) {
-                VStack(spacing: 0) {
-                    passwordTableHeader(actionsColumnWidth: actionsColumnWidth)
-
-                    Divider()
-                        .overlay(Color(.separatorColor).opacity(0.7))
-
-                    ScrollView(.vertical) {
-                        LazyVStack(spacing: 0) {
-                            ForEach(filteredEntries, id: \.id) { entry in
-                                passwordTableRow(entry, actionsColumnWidth: actionsColumnWidth)
-
-                                if entry.id != filteredEntries.last?.id {
-                                    Divider()
-                                        .overlay(Color(.separatorColor).opacity(0.45))
-                                        .padding(.leading, 12)
-                                }
-                            }
-                        }
-                    }
-                }
-                .frame(width: contentWidth, alignment: .leading)
-            }
-            .background(Color(.controlBackgroundColor).opacity(0.5))
-            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .stroke(Color(.separatorColor).opacity(0.55), lineWidth: 1)
-            }
-        }
-        .frame(maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
-    }
-
-    private var minimumTableContentWidth: CGFloat {
-        836
-    }
-
-    private var tableLeadingInset: CGFloat {
-        10
-    }
-
-    private var tableTrailingInset: CGFloat {
-        14
-    }
-
-    private func passwordTableHeader(actionsColumnWidth: CGFloat) -> some View {
-        HStack(spacing: 12) {
-            tableHeaderCell("Site", width: 260, alignment: .leading)
-            tableHeaderCell("Username", width: 220, alignment: .leading)
-            tableHeaderCell("Password", width: 240, alignment: .leading)
-            tableHeaderCell("Actions", width: actionsColumnWidth, alignment: .leading)
-        }
-        .padding(.leading, tableLeadingInset)
-        .padding(.trailing, tableTrailingInset)
-        .padding(.vertical, 12)
-        .background(Color(.controlBackgroundColor).opacity(0.3))
-    }
-
-    private func passwordTableRow(_ entry: SavedPasswordSummary, actionsColumnWidth: CGFloat) -> some View {
-        HStack(spacing: 12) {
-            HStack(spacing: 10) {
-                SiteFaviconView(host: entry.host, size: 20, cornerRadius: 5)
-
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(entry.host)
-                        .font(.subheadline.weight(.medium))
-                        .lineLimit(1)
-                    if let origin = entry.origin {
-                        Text(origin)
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
-                }
-            }
-            .frame(width: 260, alignment: .leading)
-
-            HStack(spacing: 6) {
-                Text(entry.displayUsername)
-                    .font(.subheadline)
-                    .foregroundStyle(entry.username.isEmpty ? .secondary : .primary)
-                    .lineLimit(1)
-
-                copyActionButton(help: "Copy username") {
-                    passwordManager.copyToPasteboard(entry.username)
-                }
-            }
-            .frame(width: 220, alignment: .leading)
-
-            HStack(spacing: 6) {
-                Text(revealedPasswordIDs[entry.id] ?? "••••••••••••")
-                    .font(.system(.subheadline, design: .monospaced))
-                    .lineLimit(1)
-
-                Button {
-                    toggleReveal(entry)
-                } label: {
-                    Image(systemName: revealedPasswordIDs[entry.id] == nil ? "eye" : "eye.slash")
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(theme.mutedForeground)
-                }
-                .buttonStyle(.plain)
-                .help(revealedPasswordIDs[entry.id] == nil ? "Reveal password" : "Hide password")
-
-                copyActionButton(help: "Copy password") {
-                    copyPassword(entry)
-                }
-            }
-            .frame(width: 240, alignment: .leading)
-
-            HStack {
-                Button(role: .destructive) {
-                    pendingDelete = entry
-                } label: {
-                    Image(systemName: "trash")
-                        .font(.system(size: 13, weight: .medium))
-                }
-                .buttonStyle(.plain)
-                .help("Delete saved password")
-            }
-            .frame(width: actionsColumnWidth, alignment: .leading)
-        }
-        .padding(.leading, tableLeadingInset)
-        .padding(.trailing, tableTrailingInset)
-        .padding(.vertical, 12)
-    }
-
-    private func tableHeaderCell(_ title: String, width: CGFloat, alignment: Alignment) -> some View {
-        Text(title)
-            .font(.caption.weight(.semibold))
-            .foregroundStyle(.secondary)
-            .frame(width: width, alignment: alignment)
-    }
-
-    private func copyActionButton(help: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            OraIcons(
-                icon: .copy,
-                size: .custom(14),
-                color: theme.mutedForeground
-            )
-        }
-        .buttonStyle(.plain)
-        .help(help)
-    }
-
-    private func emptyState(message: String) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(message)
-                .foregroundStyle(.secondary)
-            if let lastErrorMessage = passwordManager.lastErrorMessage {
-                Text(lastErrorMessage)
-                    .font(.caption)
-                    .foregroundStyle(.red)
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
-    }
-
-    private func unlockVault() {
-        isAuthenticating = true
+    func unlockVault() {
+        let attempt = vaultPresentation.beginUnlock()
         Task {
-            let authenticated = await passwordManager.authenticate(reason: "Unlock your saved passwords in Pane")
+            guard vaultPresentation.unlockAttempt == attempt else { return }
+            let authenticated = await passwordManager.authenticate(
+                reason: "Unlock your saved passwords in Pane", attemptID: attempt
+            )
             await MainActor.run {
-                isUnlocked = authenticated
-                isAuthenticating = false
-                if authenticated {
+                if vaultPresentation.finishUnlock(
+                    attempt: attempt, authenticated: authenticated && passwordManager.isAuthenticated
+                ) {
                     passwordManager.refresh()
                 }
             }
         }
     }
 
-    private func lockVault() {
-        isUnlocked = false
-        isAuthenticating = false
-        searchText = ""
-        revealedPasswordIDs.removeAll()
+    func lockVault() {
+        clearVaultState()
+        passwordManager.invalidateAuthenticatedContext()
     }
 
-    private func toggleReveal(_ entry: SavedPasswordSummary) {
-        if revealedPasswordIDs[entry.id] != nil {
-            revealedPasswordIDs[entry.id] = nil
+    func clearVaultState(replacement: UUID? = nil) {
+        vaultPresentation.revoke(replacement: replacement)
+        importTask?.cancel()
+        searchText = ""
+    }
+
+    /// File read and parsing are bounded and cancellable off the UI actor. Lock/close cancels both.
+    func importPasswords() {
+        guard !isImporting, let target = selectedContainer, vaultPresentation.isUnlocked else { return }
+        let panel = NSOpenPanel()
+        panel.message = "Choose a Safari, Chrome or 1Password export. Existing passwords are retained on conflict."
+        panel.allowedContentTypes = [.commaSeparatedText, UTType(filenameExtension: "1pux") ?? .data]
+        panel.canChooseDirectories = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        let targetID = target.id
+        isImporting = true
+        importTask = Task { @MainActor in
+            defer { isImporting = false
+                importTask = nil
+            }
+            let parsing = Task.detached(priority: .userInitiated) {
+                let scoped = url.startAccessingSecurityScopedResource()
+                defer {
+                    if scoped {
+                        url.stopAccessingSecurityScopedResource()
+                    }
+                }
+                do {
+                    let data = try CredentialImport.readFile(url, cancelled: { Task.isCancelled })
+                    return CredentialImport.parse(
+                        data,
+                        filename: url.lastPathComponent,
+                        cancelled: { Task.isCancelled }
+                    )
+                } catch {
+                    return CredentialImport
+                        .Result(skipped: ["File could not be read, was cancelled or exceeds limits."])
+                }
+            }
+            let parsed = await withTaskCancellationHandler {
+                await parsing.value
+            } onCancel: { parsing.cancel() }
+            guard !Task.isCancelled, vaultPresentation.isUnlocked, passwordManager.isAuthenticated else { return }
+            importReport = await passwordManager.importCredentials(parsed: parsed, containerID: targetID)
+        }
+    }
+
+    func toggleReveal(_ entry: SavedPasswordSummary) {
+        if vaultPresentation.revealedPasswordIDs[entry.id] != nil {
+            vaultPresentation.revealedPasswordIDs[entry.id] = nil
             return
         }
 
         if let password = try? passwordManager.revealPassword(for: entry) {
-            revealedPasswordIDs[entry.id] = password
+            vaultPresentation.revealedPasswordIDs[entry.id] = password
         }
     }
 
-    private func copyPassword(_ entry: SavedPasswordSummary) {
+    func copyPassword(_ entry: SavedPasswordSummary) {
         if let password = try? passwordManager.revealPassword(for: entry) {
             passwordManager.copySensitiveToPasteboard(password)
         }
     }
 
-    private func containerLabel(for container: TabContainer) -> String {
+    func containerLabel(for container: TabContainer) -> String {
         "\(container.emoji) \(container.name)"
     }
 }
