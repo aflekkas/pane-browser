@@ -167,7 +167,14 @@ final class BrowserPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
     /// of that global would silently fail (and must never be re-pointed at
     /// the page world, which would hand fill to arbitrary page script).
     func evaluatePasswordJavaScript(_ script: String, completion: ((Any?, Error?) -> Void)? = nil) {
-        webView.evaluateJavaScript(script, in: nil, in: PasswordBridge.world, completionHandler: completion)
+        webView.evaluateJavaScript(script, in: nil, in: PasswordBridge.world) { result in
+            switch result {
+            case let .success(value):
+                completion?(value, nil)
+            case let .failure(error):
+                completion?(nil, error)
+            }
+        }
     }
 
     func takeSnapshot(
