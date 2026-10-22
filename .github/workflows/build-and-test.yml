@@ -147,18 +147,33 @@ jobs:
     # Real test execution (previously CI only built). The scheme's test
     # action already targets oraTests; TEST_HOST is Pane.app, whose Swift
     # module is pinned to `Ora` via PRODUCT_MODULE_NAME in project.yml.
+    # Raw output is tee'd to a file before xcbeautify: xcbeautify hides
+    # exact Swift Testing issue messages (e.g. parameterized failures
+    # appear only as "Recorded an issue"), which made a real failure
+    # undiagnosable from job logs alone.
     - name: Run tests
       run: |
         set -o pipefail
         xcodebuild test -project Pane.xcodeproj -scheme ora -configuration Debug \
           -destination "platform=macOS" \
           -resultBundlePath "$RUNNER_TEMP/TestResults.xcresult" \
-          CODE_SIGNING_ALLOWED=NO | xcbeautify
+          CODE_SIGNING_ALLOWED=NO 2>&1 | tee "$RUNNER_TEMP/xcodebuild-test-raw.log" | xcbeautify
+
+    - name: Test result diagnostics
+      if: always()
+      run: |
+        xcrun xcresulttool get test-results tests \
+          --path "$RUNNER_TEMP/TestResults.xcresult" \
+          > "$RUNNER_TEMP/test-results.txt" 2>&1 || true
+        cat "$RUNNER_TEMP/test-results.txt" || true
 
     - name: Upload test results on failure
       if: failure()
       uses: actions/upload-artifact@v4
       with:
         name: TestResults
-        path: ${{ runner.temp }}/TestResults.xcresult
+        path: |
+          ${{ runner.temp }}/TestResults.xcresult
+          ${{ runner.temp }}/xcodebuild-test-raw.log
+          ${{ runner.temp }}/test-results.txt
         if-no-files-found: ignore
