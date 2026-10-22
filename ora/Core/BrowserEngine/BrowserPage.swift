@@ -17,7 +17,7 @@ final class BrowserPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
     let isPrivateProfile: Bool
 
     /// One app-run session identifier for certificate-exception scope.
-    private static let appSessionID = UUID().uuidString
+    static let appSessionID = UUID().uuidString
 
     private var isReadyForNavigation = false
     private var pendingLoadRequest: URLRequest?
