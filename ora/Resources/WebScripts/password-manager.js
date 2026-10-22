@@ -414,6 +414,12 @@
             overlayKeyboardNavigationState.active = typeof payload === "string"
                 ? JSON.parse(payload)
                 : Boolean(payload);
+        },
+        // Re-announce this document's token after a failed/cancelled
+        // navigation: the document survives, but native retired its
+        // registration when the provisional navigation started.
+        reannounce() {
+            send({ type: "bridgeReady" });
         }
     };
 
