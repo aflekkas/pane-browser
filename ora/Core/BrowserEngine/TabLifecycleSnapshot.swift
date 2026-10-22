@@ -37,9 +37,16 @@ enum TabLifecycleSnapshotStore {
         containerID: UUID,
         data: Data,
         isPrivate: Bool,
-        in context: ModelContext
+        in context: ModelContext,
+        persist: ((ModelContext) throws -> Void)? = nil
     ) -> Bool {
-        guard !isPrivate, let data = TabInteractionStateCodec.validated(data) else { return false }
+        guard !isPrivate else { return false }
+        guard let data = TabInteractionStateCodec.validated(data) else {
+            delete(tabID: tabID, in: context)
+            // Persist invalidation too, so reopen cannot revive the old blob.
+            try? context.save()
+            return false
+        }
         if let existing = fetch(tabID: tabID, in: context) {
             existing.containerID = containerID
             existing.interactionState = data
@@ -47,18 +54,28 @@ enum TabLifecycleSnapshotStore {
         } else {
             context.insert(TabSessionSnapshot(tabID: tabID, containerID: containerID, interactionState: data))
         }
-        return true
+        do {
+            if let persist {
+                try persist(context)
+            } else {
+                try context.save()
+            }
+            return true
+        } catch {
+            // Do not report an in-memory upsert as durable, or permit an old
+            // blob to remain eligible in this context after capture failure.
+            delete(tabID: tabID, in: context)
+            return false
+        }
     }
 
     /// Returns the blob only when it was captured under `containerID`;
     /// a stale cross-container blob is deleted and never restored.
     static func restoreData(tabID: UUID, containerID: UUID, in context: ModelContext) -> Data? {
         guard let snapshot = fetch(tabID: tabID, in: context) else { return nil }
-        guard snapshot.containerID == containerID else {
-            delete(tabID: tabID, in: context)
-            return nil
-        }
-        guard let data = TabInteractionStateCodec.validated(snapshot.interactionState) else {
+        guard snapshot.containerID == containerID,
+              let data = TabInteractionStateCodec.validated(snapshot.interactionState)
+        else {
             delete(tabID: tabID, in: context)
             return nil
         }

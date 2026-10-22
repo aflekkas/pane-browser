@@ -39,7 +39,7 @@ struct TabLifecycleTests {
 
     @Test func nothingIsCandidateBeforeCheckpointThreshold() {
         #expect(policy.stage(for: facts(idle: 60), at: t0) == nil)
-        #expect(policy.stage(for: facts(kind: .pinned, idle: 6 * 60), at: t0) == .checkpoint)
+        #expect(policy.stage(for: facts(kind: .pinned, idle: 6 * 60), at: t0) == nil)
         #expect(policy.stage(for: facts(kind: .essential, idle: 6 * 60), at: t0) == nil)
     }
 

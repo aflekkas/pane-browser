@@ -24,7 +24,8 @@ final class BrowserPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
     private var isReadyForNavigation = false
     private var pendingLoadRequest: URLRequest?
     private var pendingReload = false
-    private var pendingInteractionState: Data?
+    private let lifecycleRestoration = TabLifecycleRestoreController()
+    var onLifecycleNavigation: (() -> Void)?
     /// Password-bridge per-document state (generation, token, tracked
     /// document URL). See `PasswordDocumentTracker`.
     let passwordTracker = PasswordDocumentTracker()
@@ -79,6 +80,7 @@ final class BrowserPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
         self.delegate = delegate
 
         super.init()
+        TabLifecycleActivityProbe.install(on: contentController)
 
         for messageName in configuration.scriptMessageNames {
             if isolatedMessageNames.contains(messageName) {
@@ -99,6 +101,7 @@ final class BrowserPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
 
         urlObservation = webView.observe(\.url, options: [.new]) { [weak self] webView, _ in
             self?.passwordTracker.noteRouteChange(to: webView.url)
+            self?.onLifecycleNavigation?()
         }
 
         webView.navigationDelegate = self
@@ -153,31 +156,10 @@ final class BrowserPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
         webView.estimatedProgress
     }
 
-    /// Capture the live interaction state (history/scroll) for lifecycle
-    /// checkpoint/discard. Must run before any teardown.
-    func captureInteractionState() -> Data? {
-        TabInteractionStateCodec.validated(webView.interactionState as? Data)
-    }
-
-    /// Restore an interaction-state blob through the privacy readiness
-    /// gate: if content rules are still preparing, the blob is queued and
-    /// applied by `flushPendingNavigationIfNeeded` instead of racing them.
-    /// Returns whether WebKit already exposes a restored navigation item.
-    @discardableResult
-    func restoreInteractionState(_ data: Data) -> Bool {
-        guard TabInteractionStateCodec.isValid(data) else { return false }
-        guard isReadyForNavigation else {
-            pendingInteractionState = data
-            pendingLoadRequest = nil
-            pendingReload = false
-            return true
-        }
-        webView.interactionState = data
-        return webView.backForwardList.currentItem != nil
-    }
-
     func load(_ request: URLRequest) {
         cancelAuthentication()
+        lifecycleRestoration.supersede()
+        onLifecycleNavigation?()
         guard isReadyForNavigation else {
             pendingLoadRequest = request
             pendingReload = false
@@ -189,6 +171,8 @@ final class BrowserPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
 
     func reload() {
         cancelAuthentication()
+        lifecycleRestoration.supersede()
+        onLifecycleNavigation?()
         guard isReadyForNavigation else {
             pendingReload = true
             pendingLoadRequest = nil
@@ -200,11 +184,15 @@ final class BrowserPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
 
     func goBack() {
         cancelAuthentication()
+        lifecycleRestoration.supersede()
+        onLifecycleNavigation?()
         webView.goBack()
     }
 
     func goForward() {
         cancelAuthentication()
+        lifecycleRestoration.supersede()
+        onLifecycleNavigation?()
         webView.goForward()
     }
 
@@ -284,6 +272,10 @@ final class BrowserPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
     func teardown() {
         cancelAuthentication()
         downloadActivity.clear()
+        lifecycleRestoration.supersede()
+        onLifecycleNavigation = nil
+        pendingLoadRequest = nil
+        pendingReload = false
         passwordTracker.invalidate()
         urlObservation?.invalidate()
         urlObservation = nil
@@ -303,9 +295,13 @@ final class BrowserPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
     }
 
     private func flushPendingNavigationIfNeeded() {
-        if let pendingInteractionState {
-            self.pendingInteractionState = nil
-            webView.interactionState = pendingInteractionState
+        guard isReadyForNavigation else { return }
+        if lifecycleRestoration.applyIfReady(true, assignAndVerify: { data in
+            webView.interactionState = data
+            // Decode updates the back/forward list synchronously. A URL alone
+            // can belong to an unrelated navigation and is not restore proof.
+            return webView.backForwardList.currentItem != nil
+        }) {
             return
         }
 
@@ -412,6 +408,7 @@ final class BrowserPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
         // previous document for password purposes immediately, while the
         // navigation is still in progress.
         passwordTracker.invalidate()
+        onLifecycleNavigation?()
         if !isDownloadNavigation {
             originalURL = lastCommittedURL
             emitNavigationEvent(
@@ -600,5 +597,26 @@ final class BrowserPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
             defaultText: defaultText,
             completion: completionHandler
         )
+    }
+}
+
+/// Lifecycle state assignment shares the page readiness gate.
+extension BrowserPage {
+    /// Capture the live interaction state (history/scroll) for lifecycle
+    /// checkpoint/discard. Must run before any teardown.
+    func captureInteractionState() -> Data? {
+        TabInteractionStateCodec.validated(webView.interactionState as? Data)
+    }
+
+    /// Completion is delivered only after actual assignment/verification, or
+    /// after a newer navigation supersedes the queued request.
+    func restoreInteractionState(
+        _ data: Data,
+        completion: @escaping (TabLifecycleRestoreOutcome) -> Void
+    ) {
+        pendingLoadRequest = nil
+        pendingReload = false
+        lifecycleRestoration.enqueue(data, completion: completion)
+        flushPendingNavigationIfNeeded()
     }
 }

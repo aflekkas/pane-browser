@@ -62,7 +62,15 @@ class Tab: ObservableObject, Identifiable {
     /// pin action, never inferred from `type` alone.
     @Transient var hasActiveMediaSession: Bool = false
     @Transient var hasUnsavedFormState: Bool = false
-    @Transient var userPinnedExplicitly: Bool = false
+    // nil migrates legacy pinned rows conservatively as explicitly pinned.
+    // New rows record false; unpinning/re-pinning persists the user's intent.
+    var lifecycleExplicitPinIntent: Bool?
+    var userPinnedExplicitly: Bool {
+        get { lifecycleExplicitPinIntent ?? (type == .pinned) }
+        set { lifecycleExplicitPinIntent = newValue }
+    }
+
+    @Transient var lifecycleSnapshotSaveFailed = false
     @Transient var lastLifecycleActivity: TabLifecycleActivity?
     /// Private tabs keep interaction state here only — never on disk.
     @Transient var privateInteractionState: Data?
@@ -100,6 +108,7 @@ class Tab: ObservableObject, Identifiable {
         self.createdAt = nowDate
         self.lastAccessedAt = nowDate
         self.type = type
+        self.lifecycleExplicitPinIntent = type == .pinned
         self.isPlayingMedia = isPlayingMedia
         self.container = container
         self.order = order
@@ -238,6 +247,11 @@ class Tab: ObservableObject, Identifiable {
             delegate: nil
         )
         browserPage = page
+        self.isPrivate = isPrivate
+        page.onLifecycleNavigation = { [weak self, weak page] in
+            guard let self, let page, self.browserPage === page else { return }
+            self.invalidateLifecycleSnapshot()
+        }
 
         self.historyManager = historyManager
         self.downloadManager = downloadManager
@@ -246,46 +260,26 @@ class Tab: ObservableObject, Identifiable {
         self.setupBrowserPageDelegate(for: page)
         self.syncBackgroundColorFromHex()
         self.isDiscarded = false
-        // Try interaction-state restore before the view enters the
-        // hierarchy (Pane spec §4). Assigning performs a real navigation,
-        // so a blob that never produces one falls back to a URL load.
+        let fallbackURL = type == .normal ? url : (savedURL ?? url)
         if let state = interactionStateForRestore() {
-            let assigned = page.restoreInteractionState(state)
+            page.restoreInteractionState(state) { [weak self, weak page] outcome in
+                guard let self, let page, self.browserPage === page else { return }
+                switch outcome {
+                case .restored:
+                    self.isWebViewReady = true
+                case .invalid:
+                    self.deletePersistedInteractionState()
+                    page.load(URLRequest(url: fallbackURL))
+                    self.isWebViewReady = true
+                case .superseded:
+                    // A later navigation owns this page. Make its view usable
+                    // without replaying the old URL or leaving a restore spinner.
+                    self.isWebViewReady = true
+                }
+            }
+        } else {
+            page.load(URLRequest(url: fallbackURL))
             self.isWebViewReady = true
-            if !assigned {
-                verifyInteractionStateRestore(page: page, attemptsRemaining: 20)
-            }
-            return
-        }
-        // Load after a short delay to ensure layout
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.01) {
-            let url = if self.type != .normal {
-                self.savedURL
-            } else {
-                self.url
-            }
-            page.load(URLRequest(url: url ?? self.url))
-            self.isWebViewReady = true
-        }
-    }
-
-    /// Polls briefly for the restored navigation to appear; if none does,
-    /// the blob was undecodable and the tab falls back to its URL. This is
-    /// verification of an assignment already made, not a timed restore.
-    private func verifyInteractionStateRestore(page: BrowserPage, attemptsRemaining: Int) {
-        if TabLifecycleInteractionState.hasRestoredNavigation(on: page) {
-            return
-        }
-        guard attemptsRemaining > 0, browserPage === page else {
-            if browserPage === page {
-                deletePersistedInteractionState()
-                let url = type != .normal ? (savedURL ?? url) : url
-                page.load(URLRequest(url: url))
-            }
-            return
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
-            self?.verifyInteractionStateRestore(page: page, attemptsRemaining: attemptsRemaining - 1)
         }
     }
 
@@ -341,8 +335,17 @@ class Tab: ObservableObject, Identifiable {
     /// keep the blob in memory only.
     @discardableResult
     func captureInteractionState() -> Bool {
-        guard let page = browserPage, let data = page.captureInteractionState() else {
+        guard let page = browserPage,
+              page.profileIdentifier == container.id, page.isPrivateProfile == isPrivate,
+              !page.isLoading, let data = page.captureInteractionState()
+        else {
+            // An old checkpoint is never a fallback for failed/oversize capture.
+            invalidateLifecycleSnapshot()
             return false
+        }
+        if let currentURL = page.currentURL {
+            url = currentURL
+            urlString = currentURL.absoluteString
         }
         if isPrivate {
             privateInteractionState = data
@@ -350,55 +353,27 @@ class Tab: ObservableObject, Identifiable {
         }
         guard let context = modelContext else { return false }
         let saved = TabLifecycleSnapshotStore.save(
-            tabID: id,
-            containerID: container.id,
-            data: data,
-            isPrivate: false,
-            in: context
+            tabID: id, containerID: container.id, data: data, isPrivate: false, in: context
         )
-        if saved {
-            try? context.save()
-        }
+        lifecycleSnapshotSaveFailed = !saved
         return saved
     }
 
-    /// Pane discard: capture first, then deallocate the web view — the
-    /// only step that reclaims memory.
+    /// Automatic unload requires a current, durable checkpoint. On failure the
+    /// live page stays available; explicit user close still closes the row.
     func discard() {
-        guard browserPage != nil else {
-            isDiscarded = true
+        if browserPage != nil, !captureInteractionState() {
             return
         }
-        captureInteractionState()
-        destroyWebView()
-        isDiscarded = true
+        finishLifecycleDiscard()
         if !isPrivate {
-            try? modelContext?.save()
+            do { try modelContext?.save() } catch { lifecycleSnapshotSaveFailed = true }
         }
     }
 
-    /// Probes the live page, refreshes the guard flags, and discards only
-    /// if the policy still allows it with the probed facts. Probe errors
-    /// and timeouts fail closed.
     func discardIfAllowed(policy: TabLifecyclePolicy, isActive: Bool, at now: Date = Date()) {
-        guard let page = browserPage else { return }
-        let probedGeneration = page.passwordNavigationGeneration
-        TabLifecycleActivityProbe.probe(page: page) { [weak self] activity in
-            // Recheck after the async probe: same page, same document
-            // generation, and policy re-staged on current facts. A
-            // navigation during the probe invalidates its result.
-            guard let self, browserPage === page,
-                  page.passwordNavigationGeneration == probedGeneration
-            else { return }
-            lastLifecycleActivity = activity
-            hasActiveMediaSession = activity.hasActiveMediaSession
-            hasUnsavedFormState = activity.hasUnsavedFormState
-            if activity.isPlayingMedia {
-                isPlayingMedia = true
-            }
-            guard policy.stage(for: lifecycleFacts(isActive: isActive), at: Date()) == .discard else { return }
-            discard()
-        }
+        // `isActive` is deliberately not captured across the asynchronous probe.
+        probeLifecycleForDiscard(policy: policy)
     }
 
     func stopMedia(completed: @escaping () -> Void) {
@@ -422,6 +397,8 @@ class Tab: ObservableObject, Identifiable {
                 if self?.browserPage === page {
                     self?.browserPage = nil
                     self?.pageDelegate = nil
+                    self?.isWebViewReady = false
+                    self?.isLoading = false
                 }
                 completed()
             }
@@ -549,6 +526,9 @@ class Tab: ObservableObject, Identifiable {
             return
         }
 
+        // Recreate only after preserving the *current* page, never a prior
+        // checkpoint. If persistence fails, keep the live page and retry later.
+        guard captureInteractionState() else { return }
         destroyWebView()
         restoreTransientState(
             historyManager: historyManager,

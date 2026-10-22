@@ -123,9 +123,18 @@ struct TabLifecyclePolicy: Sendable, Equatable {
         return max(2 * kind.checkpointAfter, userUnloadDelay)
     }
 
+    /// Old probe results are not permanent vetoes on asking again.
+    func shouldProbe(_ facts: TabLifecycleFacts, at now: Date) -> Bool {
+        guard facts.state == .live, facts.hasLivePage, !facts.isActive,
+              !facts.userPinnedExplicitly, !facts.isLoading,
+              let lastAccessedAt = facts.lastAccessedAt,
+              let delay = discardAfter(for: facts.kind) else { return false }
+        return now.timeIntervalSince(lastAccessedAt) >= delay
+    }
+
     func stage(for facts: TabLifecycleFacts, at now: Date) -> TabLifecycleStage? {
-        guard facts.state == .live, facts.hasLivePage, !facts.isActive else { return nil }
-        guard let lastAccessedAt = facts.lastAccessedAt else { return nil }
+        guard facts.state == .live, facts.hasLivePage, !facts.isActive,
+              let lastAccessedAt = facts.lastAccessedAt else { return nil }
         let idle = now.timeIntervalSince(lastAccessedAt)
         guard idle >= facts.kind.checkpointAfter else { return nil }
         guard facts.isDiscardable else { return .checkpoint }
