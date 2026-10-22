@@ -80,17 +80,24 @@ struct PasswordBridgeWorldTests {
 
         // Non-vacuous: the subframe form must actually exist and be
         // focusable, and the focus must land inside the subframe document.
-        let focused = try await harness.evaluatePage(
-            """
-            (() => {
-                const doc = document.querySelector('iframe').contentDocument;
-                const field = doc && doc.querySelector('input[type=password]');
-                if (!field) { return 'missing'; }
-                field.focus();
-                return doc.activeElement === field ? 'focused' : 'not-focused';
-            })()
-            """
-        ) as? String
+        // Poll: the iframe document may finish loading after the main page.
+        var focused: String?
+        for _ in 0 ..< 50 where focused != "focused" {
+            focused = try await harness.evaluatePage(
+                """
+                (() => {
+                    const doc = document.querySelector('iframe').contentDocument;
+                    const field = doc && doc.querySelector('input[type=password]');
+                    if (!field) { return 'missing'; }
+                    field.focus();
+                    return doc.activeElement === field ? 'focused' : 'not-focused';
+                })()
+                """
+            ) as? String
+            if focused != "focused" {
+                try await Task.sleep(for: .milliseconds(100))
+            }
+        }
         #expect(focused == "focused")
 
         // Explicitly attempt to invoke the isolated handler from inside
@@ -120,29 +127,31 @@ struct PasswordBridgeWorldTests {
         try await harness.load(fixture.mainURL)
 
         _ = try await harness.evaluatePage("document.getElementById('pw').focus(); true")
-        let focus = try await harness.waitForFocusMessage()
+        _ = try await harness.waitForFocusMessage()
         let oldContext = try await harness.waitForContext()
 
         // Same-URL reload: new document, new generation, new token.
         let focusCountBeforeReload = harness.focusMessageCount
         try await harness.reload()
         _ = try await harness.evaluatePage("document.getElementById('pw').focus(); true")
-        _ = try await harness.waitForFocusMessage(afterCount: focusCountBeforeReload)
+        let newFocus = try await harness.waitForFocusMessage(afterCount: focusCountBeforeReload)
         let newContext = try await harness.waitForContext()
         #expect(newContext != oldContext)
         #expect(newContext.documentToken != oldContext.documentToken)
         #expect(newContext.generation != oldContext.generation)
 
         // A fill request minted for the pre-reload document (the delayed-
-        // auth case) must not write into the new document.
-        try await harness.fill(focus: focus, token: oldContext.documentToken)
+        // auth case) must not write into the new document. Uses the NEW
+        // document's field IDs with the OLD token, so the token mismatch
+        // is the only thing that can refuse the write.
+        try await harness.fill(focus: newFocus, token: oldContext.documentToken)
         let afterStaleFill = try await harness.evaluatePage(
             "document.getElementById('pw').value"
         ) as? String
         #expect(afterStaleFill == "")
 
         // The current document's token still fills.
-        try await harness.fill(focus: focus, token: newContext.documentToken)
+        try await harness.fill(focus: newFocus, token: newContext.documentToken)
         let afterFreshFill = try await harness.evaluatePage(
             "document.getElementById('pw').value"
         ) as? String
