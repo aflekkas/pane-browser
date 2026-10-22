@@ -68,8 +68,10 @@ struct DownloadFlowTests {
     @Test func retriesSelectOwningStoreAndLegacyScopeNeverInvokesProvider() async throws {
         let fixture = try await DownloadFlowFixture()
         defer { fixture.stop() }
-        let first = try DownloadFlowHarness()
-        let second = try DownloadFlowHarness(manager: first.manager)
+        let first = try DownloadFlowHarness(profile: BrowserEngineProfile(identifier: UUID(), isPrivate: false))
+        let second = try DownloadFlowHarness(
+            profile: BrowserEngineProfile(identifier: UUID(), isPrivate: false), manager: first.manager
+        )
         defer { first.close()
             second.close()
         }
@@ -105,6 +107,20 @@ struct DownloadFlowTests {
             first.manager.retryDownload(legacy)
         }
         #expect(spy.invocations == 0)
+        let actualSession = BrowserDownloadSession(page: first.page)
+        let beforeRefusal = fixture.requests.count
+        var refused = 0
+        for scope in [nil, second.page.downloadProfileScopeID] as [String?] {
+            let mismatched = try Download(originalURL: fixture.url("/large"), fileName: "mismatch")
+            mismatched.profileID = scope
+            actualSession.start(mismatched, resumeData: Data([1, 2, 3])) { task in
+                #expect(task == nil)
+                refused += 1
+            }
+        }
+        // Refusal is synchronous, before WebKit sees the invalid resume blob.
+        #expect(refused == 2)
+        #expect(fixture.requests.count == beforeRefusal)
     }
 
     @Test func delayedProviderKeepsRecordPendingAndNeverFallsBack() throws {
@@ -139,5 +155,86 @@ private final class DelayedDownloadSession: DownloadTransferSession {
     func start(_ record: Download, resumeData: Data?, completion: @escaping (BrowserDownloadTask?) -> Void) {
         invocations += 1
         self.completion = completion
+    }
+}
+
+extension DownloadFlowTests {
+    @Test func delayedSuccessfulWebKitResumeKeepsSingleRecordAndSingleTransfer() async throws {
+        let fixture = try await DownloadFlowFixture()
+        defer { fixture.stop() }
+        let harness = try DownloadFlowHarness()
+        defer { harness.close() }
+        try await harness.load(fixture.url())
+        try await harness.click("large")
+        try await harness.wait("first transfer progress") {
+            harness.manager.activeDownloads.first?.downloadedBytes ?? 0 > 65536
+        }
+        let record = try #require(harness.manager.activeDownloads.first)
+        harness.manager.cancelDownload(record)
+        try await harness.wait("resume data") { record.resumeData != nil }
+        let session = GatedDownloadSession(base: BrowserDownloadSession(page: harness.page))
+        harness.manager.registerDownloadSession(session)
+        let requestCount = fixture.requests.count
+        harness.manager.retryDownload(record)
+        harness.manager.retryDownload(record)
+        #expect(record.status == .pending)
+        #expect(harness.manager.recentDownloads.count == 1)
+        #expect(fixture.requests.count == requestCount)
+        #expect(session.invocations == 1)
+        session.release?()
+        try await harness.wait("delayed real resume completes") { record.status == .completed }
+        #expect(harness.manager.recentDownloads.count == 1)
+        #expect(fixture.requests.count == requestCount + 1)
+        #expect(fixture.requests.last?.lowercased().contains("range: bytes=") == true)
+        #expect(record.quarantineVerified)
+        #expect(harness.manager.isEphemeral(record))
+    }
+
+    @Test func concurrentDownloadsReserveDistinctDestinationsAndPreserveExistingFile() async throws {
+        let fixture = try await DownloadFlowFixture()
+        defer { fixture.stop() }
+        let first = try DownloadFlowHarness()
+        let second = try DownloadFlowHarness(manager: first.manager)
+        defer { first.close()
+            second.close()
+        }
+        let existing = first.directory.appendingPathComponent("payload.bin")
+        let sentinel = Data("do not overwrite".utf8)
+        try sentinel.write(to: existing)
+        try await first.load(fixture.url())
+        try await second.load(fixture.url())
+        try await first.click("large")
+        try await second.click("large")
+        try await first.wait("two reserved destinations") { first.manager.recentDownloads.count == 2 }
+        let paths = first.manager.recentDownloads.compactMap(\.destinationURL)
+        #expect(Set(paths).count == 2)
+        #expect(!paths.contains(existing))
+        try await first.wait("both transfers completed") {
+            first.manager.recentDownloads.allSatisfy { $0.status == .completed }
+        }
+        #expect(try Data(contentsOf: existing) == sentinel)
+        for path in paths {
+            #expect(try Data(contentsOf: path) == DownloadFlowFixture.payload)
+            #expect(DownloadSafety.hasQuarantine(path))
+        }
+    }
+}
+
+@MainActor
+private final class GatedDownloadSession: DownloadTransferSession {
+    let base: BrowserDownloadSession
+    var profileScopeID: String {
+        base.profileScopeID
+    }
+
+    var invocations = 0
+    var release: (() -> Void)?
+    init(base: BrowserDownloadSession) {
+        self.base = base
+    }
+
+    func start(_ record: Download, resumeData: Data?, completion: @escaping (BrowserDownloadTask?) -> Void) {
+        invocations += 1
+        release = { [base] in base.start(record, resumeData: resumeData, completion: completion) }
     }
 }

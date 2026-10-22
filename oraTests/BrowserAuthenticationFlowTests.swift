@@ -59,7 +59,7 @@ struct BrowserAuthenticationFlowTests {
             host: challenge.host, port: challenge.port, fingerprint: #require(challenge.fingerprint),
             scope: harness.page.certificateExceptionScope
         ))
-        #expect(harness.manager.recentDownloads.isEmpty)
+        #expect(!harness.manager.recentDownloads.contains { $0.status == .completed })
     }
 
     @Test func certificateReplacementAndTeardownCompleteOnceWithoutLateGrant() async throws {
@@ -84,6 +84,96 @@ struct BrowserAuthenticationFlowTests {
         stale(true)
         #expect(try !CertificateExceptions.shared.isAllowed(
             host: first.host, port: first.port, fingerprint: #require(first.fingerprint),
+            scope: harness.page.certificateExceptionScope
+        ))
+    }
+}
+
+extension BrowserAuthenticationFlowTests {
+    @Test func twoSpacesKeepRealAuthenticatedDownloadSessionsSeparateAcrossResume() async throws {
+        let fixture = try await DownloadFlowFixture()
+        defer { fixture.stop() }
+        let first = try DownloadFlowHarness(profile: BrowserEngineProfile(identifier: UUID(), isPrivate: false))
+        let second = try DownloadFlowHarness(
+            profile: BrowserEngineProfile(identifier: UUID(), isPrivate: false), manager: first.manager
+        )
+        defer { first.close()
+            second.close()
+        }
+        for harness in [first, second] {
+            try harness.page.load(URLRequest(url: fixture.url("/auth")))
+            try await harness.wait("each Space independently prompts for real HTTP credentials") {
+                harness.window.attachedSheet != nil
+            }
+            let sheet = try #require(harness.window.attachedSheet)
+            let fields = allSubviews(sheet.contentView).compactMap { $0 as? NSTextField }
+            let username = try #require(fields.first { $0.placeholderString == "Username" })
+            let password = try #require(fields.first { $0 is NSSecureTextField })
+            username.stringValue = "fixture"
+            password.stringValue = "pass"
+            let signIn = try #require(allSubviews(sheet.contentView).compactMap { $0 as? NSButton }
+                .first { $0.title == "Sign In" })
+            signIn.performClick(nil)
+            try await harness.wait("authenticated page committed") {
+                harness.page.lastCommittedURL?.path == "/auth" && !harness.page.isLoading
+            }
+        }
+        // Both profiles have independently authenticated, and both remain
+        // alive. A retry for A must continue A even after B registered last.
+        for harness in [first, second] {
+            let url = try fixture.url("/auth-large")
+            let literal = try #require(String(data: JSONEncoder().encode(url.absoluteString), encoding: .utf8))
+            _ = try await harness.page.webView.evaluateJavaScript(
+                "const a=document.getElementById('html'); a.href=\(literal); a.click(); true"
+            )
+            try await harness.wait("authenticated transfer") {
+                first.manager.activeDownloads.contains {
+                    $0.profileID == harness.page.downloadProfileScopeID && $0.downloadedBytes > 65536
+                }
+            }
+            let record = try #require(first.manager.activeDownloads.first {
+                $0.profileID == harness.page.downloadProfileScopeID
+            })
+            first.manager.cancelDownload(record)
+            try await harness.wait("authenticated resume data") { record.resumeData != nil }
+        }
+        let record = try #require(first.manager.recentDownloads.first {
+            $0.profileID == first.page.downloadProfileScopeID
+        })
+        first.manager.retryDownload(record)
+        #expect(first.page.hasActiveDownloads)
+        #expect(!second.page.hasActiveDownloads)
+        try await first.wait("authenticated resumed transfer completes") { record.status == .completed }
+        #expect(fixture.requests.contains { $0.lowercased().contains("range: bytes=") })
+        #expect(record.quarantineVerified)
+    }
+
+    private func allSubviews(_ view: NSView?) -> [NSView] {
+        guard let view else { return [] }
+        return [view] + view.subviews.flatMap { allSubviews($0) }
+    }
+}
+
+extension BrowserAuthenticationFlowTests {
+    @Test func explicitCertificateDecisionAllowsOnlyTheCurrentEndpoint() async throws {
+        let tls = try await DownloadFlowFixture(tls: DownloadFixtureTLS.options())
+        defer { tls.stop() }
+        let harness = try DownloadFlowHarness()
+        defer { harness.close() }
+        let url = try tls.url(secure: true)
+        harness.page.load(URLRequest(url: url))
+        try await harness.wait("certificate decision") { harness.tab.certificateChallenge != nil }
+        let challenge = try #require(harness.tab.certificateChallenge)
+        harness.tab.resolveCertificateChallenge(id: challenge.id, allowed: true)
+        try await harness.wait("explicit trust decision loads real TLS page") {
+            harness.page.lastCommittedURL == url && !harness.page.isLoading
+        }
+        #expect(try CertificateExceptions.shared.isAllowed(
+            host: challenge.host, port: challenge.port, fingerprint: #require(challenge.fingerprint),
+            scope: harness.page.certificateExceptionScope
+        ))
+        #expect(try !CertificateExceptions.shared.isAllowed(
+            host: challenge.host, port: challenge.port + 1, fingerprint: #require(challenge.fingerprint),
             scope: harness.page.certificateExceptionScope
         ))
     }

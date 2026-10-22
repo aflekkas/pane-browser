@@ -115,3 +115,25 @@ struct DownloadSafetyTests {
         #expect(once.hasFired)
     }
 }
+
+extension DownloadSafetyTests {
+    @Test func danglingSymlinkAndUncreatedReservationsAreOccupiedDestinations() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("DownloadSymlink-\(UUID())")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let link = directory.appendingPathComponent("payload.bin")
+        let outside = directory.deletingLastPathComponent().appendingPathComponent("missing-\(UUID())")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: outside)
+        #expect(!FileManager.default.fileExists(atPath: link.path))
+        let reserved = directory.appendingPathComponent("payload (1).bin")
+        let candidate = DownloadSafety.uniqueDestination(
+            in: directory,
+            suggestedFilename: "../../payload.bin",
+            reserved: [reserved]
+        )
+        #expect(candidate.lastPathComponent == "payload (2).bin")
+        #expect(DownloadSafety.isContained(candidate, in: directory))
+        #expect(!FileManager.default.fileExists(atPath: outside.path))
+        #expect(try FileManager.default.destinationOfSymbolicLink(atPath: link.path) == outside.path)
+    }
+}

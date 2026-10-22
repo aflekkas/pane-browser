@@ -72,14 +72,14 @@ final class DownloadFlowFixture {
         if path.hasPrefix("/redirect?") {
             let target = String(path.dropFirst("/redirect?".count))
             send(connection, status: "302 Found", headers: "Location: \(target)\r\n", body: Data())
-        } else if path == "/auth", !request.contains("Authorization: Basic Zml4dHVyZTpwYXNz") {
+        } else if path.hasPrefix("/auth"), Self.header("authorization", in: request) != "Basic Zml4dHVyZTpwYXNz" {
             send(
                 connection,
                 status: "401 Unauthorized",
                 headers: "WWW-Authenticate: Basic realm=\"fixture\"\r\n",
                 body: Data()
             )
-        } else if path == "/large" {
+        } else if path == "/large" || path == "/auth-large" {
             let range = request.components(separatedBy: "\r\n").first { $0.lowercased().hasPrefix("range: bytes=") }
             let offset = range
                 .flatMap { Int($0.components(separatedBy: "=").last?.split(separator: "-").first ?? "0") } ?? 0
@@ -100,6 +100,11 @@ final class DownloadFlowFixture {
         } else {
             send(connection, headers: "Content-Type: text/html\r\n", body: Data(Self.html.utf8))
         }
+    }
+
+    private static func header(_ name: String, in request: String) -> String? {
+        request.components(separatedBy: "\r\n").first { $0.lowercased().hasPrefix(name + ":") }?
+            .split(separator: ":", maxSplits: 1).last?.trimmingCharacters(in: .whitespaces)
     }
 
     private func sendChunk(_ connection: NWConnection, offset: Int) {
