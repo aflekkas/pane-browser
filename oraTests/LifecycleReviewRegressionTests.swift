@@ -22,11 +22,28 @@ struct LifecycleReviewRegressionTests {
         defer { manager.closeLifecycleFixture() }
         let tab = try #require(manager.modelContext.fetch(FetchDescriptor<Tab>()).first { $0.id == tabID })
         manager.activateTab(tab)
-        let harness = try LifecycleRepairHarness(page: #require(tab.browserPage))
+        // Restore while explicitly hidden: orderBack alone can become occluded
+        // under concurrent test windows, suspending requestAnimationFrame.
+        let harness = try LifecycleRepairHarness(page: #require(tab.browserPage), isVisible: false)
         defer { harness.close() }
         try await harness.loaded(fixture.url("/b"))
+        #expect(try await harness.evaluate("document.visibilityState") as? String == "hidden")
         #expect(tab.canGoBack)
+        let before = try #require(TabLifecycleSnapshotStore.fetch(tabID: tab.id, in: manager.modelContext)?
+            .interactionState)
+        #expect(harness.page.hasPendingLifecycleRestore)
+        #expect(tab.captureLifecycleCheckpoint() == .pendingRestore)
+        let quit = TabLifecycleQuitCoordinator()
+        quit.register(manager)
+        #expect(quit.captureAllLiveSnapshots())
+        #expect(TabLifecycleSnapshotStore.fetch(tabID: tab.id, in: manager.modelContext)?.interactionState == before)
+        harness.show()
         try await harness.expectScroll(y: 1200)
+        try await LifecycleRepairHarness.waitUntil { !harness.page.hasPendingLifecycleRestore }
+        #expect(tab.captureInteractionState())
+        let applied = try #require(TabLifecycleSnapshotStore.fetch(tabID: tab.id, in: manager.modelContext)?
+            .interactionState)
+        #expect(LifecycleRepairHarness.checkpointScrollY(applied) == 1200)
         tab.goBack()
         try await harness.loaded(fixture.url())
     }
@@ -48,6 +65,8 @@ struct LifecycleReviewRegressionTests {
         #expect(tab.captureInteractionState())
         let before = try #require(TabLifecycleSnapshotStore.fetch(tabID: tab.id, in: manager.modelContext)?
             .interactionState)
+        // Distinguish an incorrect capture from delayed viewport restoration.
+        #expect(LifecycleRepairHarness.checkpointScrollY(before) == 1200)
         tab.finishLifecycleDiscard()
         var releaseReadiness: (() -> Void)?
         let page = BrowserPage(

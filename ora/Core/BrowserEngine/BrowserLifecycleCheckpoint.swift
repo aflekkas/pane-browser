@@ -18,6 +18,10 @@ final class BrowserLifecycleCheckpoint: NSObject, WKScriptMessageHandler {
     private weak var webView: WKWebView?
     private var position: (url: String, scrollX: Double, scrollY: Double)?
     private var restoring: Payload?
+    private var restoreID: UUID?
+    var hasPendingRestore: Bool {
+        restoring != nil
+    }
 
     func install(on webView: WKWebView) {
         self.webView = webView
@@ -41,11 +45,20 @@ final class BrowserLifecycleCheckpoint: NSObject, WKScriptMessageHandler {
               url == webView.url?.absoluteString,
               let scrollX = body["scrollX"] as? Double, let scrollY = body["scrollY"] as? Double,
               scrollX.isFinite, scrollY.isFinite else { return }
+        if let acknowledgement = body["restoreID"] as? String {
+            // Only this assignment can release its pending viewport restore.
+            guard restoring != nil, acknowledgement == restoreID?.uuidString else { return }
+            restoring = nil
+            restoreID = nil
+        } else if restoring != nil {
+            // Ignore the restored document's initial zero-position reports.
+            return
+        }
         position = (url, scrollX, scrollY)
     }
 
     func capture(_ state: Data, url: URL?) -> Data? {
-        guard let state = TabInteractionStateCodec.validated(state) else { return nil }
+        guard !hasPendingRestore, let state = TabInteractionStateCodec.validated(state) else { return nil }
         guard let position, position.url == url?.absoluteString else { return state }
         let payload = Payload(
             interactionState: state,
@@ -58,12 +71,13 @@ final class BrowserLifecycleCheckpoint: NSObject, WKScriptMessageHandler {
     }
 
     func prepareRestore(_ data: Data) -> Data? {
-        restoring = nil
+        supersede()
         guard data.starts(with: Self.prefix) else { return TabInteractionStateCodec.validated(data) }
         guard let payload = try? PropertyListDecoder().decode(Payload.self, from: data.dropFirst(Self.prefix.count)),
               payload.scrollX.isFinite, payload.scrollY.isFinite,
               TabInteractionStateCodec.isValid(payload.interactionState) else { return nil }
         restoring = payload
+        restoreID = UUID()
         return payload.interactionState
     }
 
@@ -72,22 +86,44 @@ final class BrowserLifecycleCheckpoint: NSObject, WKScriptMessageHandler {
     }
 
     func didFinish() {
-        guard let payload = restoring, let webView else { return }
-        restoring = nil
-        guard webView.url?.absoluteString == payload.url,
-              let encodedURL = try? JSONEncoder().encode(payload.url),
+        guard let payload = restoring, let restoreID, let webView else { return }
+        guard webView.url?.absoluteString == payload.url else { supersede()
+            return
+        }
+        guard let encodedURL = try? JSONEncoder().encode(payload.url),
               let literal = String(data: encodedURL, encoding: .utf8) else { return }
-        // The URL guard also runs inside the evaluated document. A replacement
-        // navigation cannot receive the old document's scroll position.
+        // WebKit can apply its native scroll after didFinish, so wait for the
+        // rendering frame. Hidden views suspend frames: keep the authoritative
+        // checkpoint pending until this operation acknowledges actual application.
+        // A replacement document/assignment cannot acknowledge an obsolete token.
         webView.evaluateJavaScript("""
-        requestAnimationFrame(() => {
-          if (location.href === \(literal)) scrollTo(\(payload.scrollX), \(payload.scrollY));
-        }); true;
+        (() => {
+        const operation = { id: "\(restoreID.uuidString)" };
+        globalThis.__paneLifecycleViewportRestore = operation;
+        operation.frame = requestAnimationFrame(() => {
+          if (globalThis.__paneLifecycleViewportRestore !== operation || location.href !== \(literal)) return;
+          delete globalThis.__paneLifecycleViewportRestore;
+          scrollTo(\(payload.scrollX), \(payload.scrollY));
+          window.webkit.messageHandlers.paneLifecycleScroll.postMessage({
+            url: location.href, scrollX: scrollX, scrollY: scrollY,
+            restoreID: "\(restoreID.uuidString)"
+          });
+        });
+        })(); true;
         """, in: nil, in: Self.world, completionHandler: nil)
     }
 
     func supersede() {
+        if let restoreID {
+            webView?.evaluateJavaScript("""
+            if (globalThis.__paneLifecycleViewportRestore?.id === "\(restoreID.uuidString)") {
+              cancelAnimationFrame(globalThis.__paneLifecycleViewportRestore.frame);
+              delete globalThis.__paneLifecycleViewportRestore;
+            } true;
+            """, in: nil, in: Self.world, completionHandler: nil)
+        }
         restoring = nil
+        restoreID = nil
         position = nil
     }
 
