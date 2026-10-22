@@ -44,10 +44,10 @@ extension Tab {
             // bridge's flag: the next clear probe must be able to clear it.
             guard !activity.blocksDiscard, !page.hasActiveDownloads else { return }
             MainActor.assumeIsolated {
-                guard let manager = tabManager,
-                      policy.stage(for: lifecycleFacts(isActive: manager.isActive(self)), at: Date()) == .discard,
+                guard let manager = self.tabManager,
+                      policy.stage(for: self.lifecycleFacts(isActive: manager.isActive(self)), at: Date()) == .discard,
                       !page.isLoading else { return }
-                discard()
+                self.discard()
             }
         }
     }
