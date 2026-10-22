@@ -12,21 +12,26 @@ enum BrowserAuthHandler {
         to challenge: URLAuthenticationChallenge,
         window: NSWindow?,
         scope: CertificateExceptionScope,
+        operation: BrowserAuthenticationOperation,
+        dismissCertificateDecision: ((UUID) -> Void)? = nil,
         exceptions: CertificateExceptions = .shared,
         presentCertificateDecision: ((CertificateExceptions.Evaluation, @escaping (Bool) -> Void) -> Void)? = nil
     ) async -> (URLSession.AuthChallengeDisposition, URLCredential?) {
-        switch challenge.protectionSpace.authenticationMethod {
+        guard operation.isActive else { return (.cancelAuthenticationChallenge, nil) }
+        return switch challenge.protectionSpace.authenticationMethod {
         case NSURLAuthenticationMethodServerTrust:
             await serverTrust(
                 challenge,
                 scope: scope,
+                operation: operation,
+                dismissCertificateDecision: dismissCertificateDecision,
                 exceptions: exceptions,
                 presentCertificateDecision: presentCertificateDecision,
                 window: window
             )
         case NSURLAuthenticationMethodHTTPBasic, NSURLAuthenticationMethodHTTPDigest,
              NSURLAuthenticationMethodNTLM:
-            await basicAuth(challenge, window: window)
+            await basicAuth(challenge, window: window, operation: operation)
         default:
             (.performDefaultHandling, nil)
         }
@@ -34,7 +39,8 @@ enum BrowserAuthHandler {
 
     private static func basicAuth(
         _ challenge: URLAuthenticationChallenge,
-        window: NSWindow?
+        window: NSWindow?,
+        operation: BrowserAuthenticationOperation
     ) async -> (URLSession.AuthChallengeDisposition, URLCredential?) {
         guard challenge.previousFailureCount < 3 else { return (.cancelAuthenticationChallenge, nil) }
         let space = challenge.protectionSpace
@@ -54,15 +60,8 @@ enum BrowserAuthHandler {
         stack.addArrangedSubview(pass)
         alert.accessoryView = stack
         alert.window.initialFirstResponder = user
-        let response: NSApplication.ModalResponse = if let window {
-            await withCheckedContinuation { continuation in
-                let once = OnceCompletion<NSApplication.ModalResponse>(continuation.resume(returning:))
-                alert.beginSheetModal(for: window) { once.call($0) }
-            }
-        } else {
-            alert.runModal()
-        }
-        guard response == .alertFirstButtonReturn, !user.stringValue.isEmpty else {
+        let response = await present(alert, window: window, operation: operation)
+        guard operation.isActive, response == .alertFirstButtonReturn, !user.stringValue.isEmpty else {
             return (.cancelAuthenticationChallenge, nil)
         }
         return (
@@ -74,6 +73,8 @@ enum BrowserAuthHandler {
     private static func serverTrust(
         _ challenge: URLAuthenticationChallenge,
         scope: CertificateExceptionScope,
+        operation: BrowserAuthenticationOperation,
+        dismissCertificateDecision: ((UUID) -> Void)?,
         exceptions: CertificateExceptions,
         presentCertificateDecision: ((CertificateExceptions.Evaluation, @escaping (Bool) -> Void) -> Void)?,
         window: NSWindow?
@@ -91,13 +92,21 @@ enum BrowserAuthHandler {
         case .requiresUserDecision:
             let allowed: Bool = if let presentCertificateDecision {
                 await withCheckedContinuation { continuation in
-                    let once = OnceCompletion<Bool>(continuation.resume(returning:))
+                    let once = OnceCompletion<Bool> { continuation.resume(returning: $0) }
+                    operation.onCancel = {
+                        dismissCertificateDecision?(evaluation.id)
+                        once.call(false)
+                    }
+                    guard operation.isActive else { once.call(false)
+                        return
+                    }
                     presentCertificateDecision(evaluation) { once.call($0) }
                 }
             } else {
-                await fallbackAlert(evaluation: evaluation, window: window)
+                await fallbackAlert(evaluation: evaluation, window: window, operation: operation)
             }
-            guard allowed,
+            operation.onCancel = nil
+            guard allowed, operation.isActive,
                   let fingerprint = evaluation.fingerprint,
                   exceptions.allowForSession(
                       host: space.host,
@@ -113,20 +122,34 @@ enum BrowserAuthHandler {
 
     /// Fallback when no tab interstitial is available: critical alert,
     /// proceed is the second button and never the default.
-    private static func fallbackAlert(evaluation: CertificateExceptions.Evaluation, window: NSWindow?) async -> Bool {
+    private static func fallbackAlert(
+        evaluation: CertificateExceptions.Evaluation, window: NSWindow?, operation: BrowserAuthenticationOperation
+    ) async -> Bool {
         let alert = NSAlert()
         alert.alertStyle = .critical
         alert.messageText = "This Connection Is Not Private"
-        alert.informativeText = evaluation.reason
+        alert.informativeText = "\(evaluation.host):\(evaluation.port)\n\(evaluation.reason)"
         alert.addButton(withTitle: "Go Back")
         alert.addButton(withTitle: "Continue for This Session")
-        if let window {
-            let response: NSApplication.ModalResponse = await withCheckedContinuation { continuation in
-                let once = OnceCompletion<NSApplication.ModalResponse>(continuation.resume(returning:))
-                alert.beginSheetModal(for: window) { response in once.call(response) }
+        return await present(alert, window: window, operation: operation) == .alertSecondButtonReturn
+    }
+
+    /// No app-modal fallback: absent presentation ownership cancels safely.
+    private static func present(
+        _ alert: NSAlert, window: NSWindow?, operation: BrowserAuthenticationOperation
+    ) async -> NSApplication.ModalResponse {
+        guard let window, operation.isActive else { return .abort }
+        return await withCheckedContinuation { continuation in
+            let once = OnceCompletion<NSApplication.ModalResponse> { continuation.resume(returning: $0) }
+            operation.onCancel = { [weak window] in
+                window?.endSheet(alert.window, returnCode: .abort)
+                alert.window.orderOut(nil)
+                once.call(.abort)
             }
-            return response == NSApplication.ModalResponse.alertSecondButtonReturn
+            alert.beginSheetModal(for: window) { response in
+                operation.onCancel = nil
+                once.call(operation.isActive ? response : .abort)
+            }
         }
-        return alert.runModal() == NSApplication.ModalResponse.alertSecondButtonReturn
     }
 }

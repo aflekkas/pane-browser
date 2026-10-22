@@ -6,39 +6,28 @@ import Foundation
 /// extracted so the core page class stays within lint limits. WebKit
 /// dispatches these delegate callbacks to the same instance.
 extension BrowserPage {
+    var hasActiveDownloads: Bool {
+        downloadActivity.isActive
+    }
+
+    func cancelAuthentication() {
+        MainActor.assumeIsolated { authenticationSession.cancel() }
+    }
+
     var certificateExceptionScope: CertificateExceptionScope {
         CertificateExceptionScope(
-            profileID: isPrivateProfile ? "private:\(profileIdentifier.uuidString)" : profileIdentifier.uuidString,
+            profileID: isPrivateProfile ? "private:\(privateSessionID.uuidString)" : profileIdentifier.uuidString,
             sessionID: Self.appSessionID
         )
     }
 
     /// Scope string stamped onto download tasks for resume checks.
     var downloadProfileScopeID: String {
-        isPrivateProfile ? "private:\(profileIdentifier.uuidString)" : profileIdentifier.uuidString
+        isPrivateProfile ? "private:\(privateSessionID.uuidString)" : profileIdentifier.uuidString
     }
 
     var windowForAuthSheets: NSWindow? {
         webView.window
-    }
-
-    /// Resume via WebKit; the new download re-enters through the normal
-    /// `didStartDownload` path. The created task carries this page's
-    /// profile scope, or `DownloadManager` refuses the resume.
-    func resumeDownload(fromResumeData resumeData: Data, completion: @escaping (BrowserDownloadTask?) -> Void) {
-        let once = OnceCompletion(completion)
-        webView.resumeDownload(fromResumeData: resumeData) { [weak self] download in
-            guard let self else {
-                once.call(nil)
-                return
-            }
-            once.call(BrowserDownloadTask(
-                download: download,
-                originalURL: download.originalRequest?.url ?? self.webView.url ?? URL(string: "about:blank")!,
-                pageURL: self.webView.url,
-                profileScopeID: self.downloadProfileScopeID
-            ))
-        }
     }
 
     func webView(
@@ -55,7 +44,11 @@ extension BrowserPage {
         )> { result in
             completionHandler(result.disposition, result.credential)
         }
-        delegate?.browserPage(self, respondTo: challenge, scope: certificateExceptionScope) { disposition, credential in
+        guard let delegate else {
+            once.call((.cancelAuthenticationChallenge, nil))
+            return
+        }
+        delegate.browserPage(self, respondTo: challenge, scope: certificateExceptionScope) { disposition, credential in
             once.call((disposition: disposition, credential: credential))
         }
     }

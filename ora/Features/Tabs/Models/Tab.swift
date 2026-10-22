@@ -505,11 +505,15 @@ class Tab: ObservableObject, Identifiable {
         _ evaluation: CertificateExceptions.Evaluation,
         decide: @escaping (Bool) -> Void
     ) {
+        if let old = certificateChallenge {
+            resolveCertificateChallenge(id: old.id, allowed: false)
+        }
         certificateChallenge = evaluation
         certificateDecision = decide
     }
 
-    func resolveCertificateChallenge(allowed: Bool) {
+    func resolveCertificateChallenge(id: UUID, allowed: Bool) {
+        guard certificateChallenge?.id == id else { return }
         let decide = certificateDecision
         certificateChallenge = nil
         certificateDecision = nil

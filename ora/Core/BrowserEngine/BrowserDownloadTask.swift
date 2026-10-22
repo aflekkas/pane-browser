@@ -4,6 +4,7 @@ import Foundation
 
 final class BrowserDownloadTask: NSObject, WKDownloadDelegate {
     let id = UUID()
+    var activity: BrowserDownloadActivity?
     var originalURL: URL
     /// Page the download was initiated from, for quarantine provenance.
     var pageURL: URL?
@@ -34,13 +35,23 @@ final class BrowserDownloadTask: NSObject, WKDownloadDelegate {
         download.progress
     }
 
+    func clearCallbacks() {
+        onDestinationRequest = nil
+        onRedirect = nil
+        onFinish = nil
+        onFail = nil
+        onAuthChallenge = nil
+    }
+
     func cancel() {
+        activity?.end(id)
         download.cancel { _ in }
     }
 
     /// Cancelling via this variant surfaces resume data so the download can
     /// be resumed later instead of restarted from zero.
     func cancel(completionHandler: @escaping (Data?) -> Void) {
+        activity?.end(id)
         let once = OnceCompletion(completionHandler)
         download.cancel { [weak self] resumeData in
             self?.lastResumeData = resumeData
@@ -75,12 +86,16 @@ final class BrowserDownloadTask: NSObject, WKDownloadDelegate {
     }
 
     func downloadDidFinish(_ download: WKDownload) {
+        activity?.end(id)
         onFinish?()
+        clearCallbacks()
     }
 
     func download(_ download: WKDownload, didFailWithError error: Error, resumeData: Data?) {
         lastResumeData = resumeData
+        activity?.end(id)
         onFail?(error, resumeData)
+        clearCallbacks()
     }
 
     func download(

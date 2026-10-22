@@ -175,6 +175,9 @@ final class CertificateExceptions: @unchecked Sendable {
     }
 
     struct Evaluation: Sendable {
+        let id = UUID()
+        var host: String = ""
+        var port: Int = 443
         var decision: CertificateTrustDecision
         var fingerprint: String?
         var severity: CertificateTrustSeverity
@@ -193,6 +196,8 @@ final class CertificateExceptions: @unchecked Sendable {
     ) -> Evaluation {
         guard let trust else {
             return Evaluation(
+                host: host,
+                port: port,
                 decision: .cancel,
                 fingerprint: nil,
                 severity: .red,
@@ -203,6 +208,8 @@ final class CertificateExceptions: @unchecked Sendable {
         var cfError: CFError?
         if SecTrustEvaluateWithError(trust, &cfError) {
             return Evaluation(
+                host: host,
+                port: port,
                 decision: .performDefaultHandling,
                 fingerprint: Self.fingerprint(of: trust),
                 severity: .red,
@@ -217,10 +224,20 @@ final class CertificateExceptions: @unchecked Sendable {
         // Fail closed if the certificate identity is unavailable: without a
         // fingerprint there is nothing exact to key an exception to.
         guard let fingerprint, Self.isValidFingerprint(fingerprint) else {
-            return Evaluation(decision: .cancel, fingerprint: nil, severity: severity, reason: reason, chain: chain)
+            return Evaluation(
+                host: host,
+                port: port,
+                decision: .cancel,
+                fingerprint: nil,
+                severity: severity,
+                reason: reason,
+                chain: chain
+            )
         }
         if isAllowed(host: host, port: port, fingerprint: fingerprint, scope: scope) {
             return Evaluation(
+                host: host,
+                port: port,
                 decision: .useCredential,
                 fingerprint: fingerprint,
                 severity: severity,
@@ -229,6 +246,8 @@ final class CertificateExceptions: @unchecked Sendable {
             )
         }
         return Evaluation(
+            host: host,
+            port: port,
             decision: .requiresUserDecision,
             fingerprint: fingerprint,
             severity: severity,

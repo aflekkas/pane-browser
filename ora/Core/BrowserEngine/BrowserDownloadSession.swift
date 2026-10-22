@@ -1,0 +1,85 @@
+import Foundation
+@preconcurrency import WebKit
+
+@MainActor
+protocol DownloadTransferSession: AnyObject {
+    var profileScopeID: String { get }
+    func start(_ record: Download, resumeData: Data?, completion: @escaping (BrowserDownloadTask?) -> Void)
+    func cancelPending(_ recordID: UUID)
+}
+
+extension DownloadTransferSession {
+    func cancelPending(_ recordID: UUID) {}
+}
+
+/// Retains the exact WebKit data store, including a private store's identity,
+/// even if the initiating tab closes. Never routes retry through the key window.
+@MainActor
+final class BrowserDownloadSession: DownloadTransferSession {
+    let profileScopeID: String
+    private let webView: WKWebView
+    private let activity: BrowserDownloadActivity
+    private weak var page: BrowserPage?
+    private var pending: [UUID: UUID] = [:]
+
+    init(page: BrowserPage) {
+        self.page = page
+        activity = page.downloadActivity
+        webView = page.webView
+        profileScopeID = page.downloadProfileScopeID
+    }
+
+    func configure(_ task: BrowserDownloadTask) {
+        task.activity = activity
+        activity.begin(task.id)
+        task.onAuthChallenge = { [weak page] challenge in
+            guard let page, let delegate = page.delegate else { return (.cancelAuthenticationChallenge, nil) }
+            return await withCheckedContinuation { continuation in
+                let once = OnceCompletion<(URLSession.AuthChallengeDisposition, URLCredential?)> {
+                    continuation.resume(returning: $0)
+                }
+                delegate.browserPage(page, respondTo: challenge, scope: page.certificateExceptionScope) {
+                    once.call(($0, $1))
+                }
+            }
+        }
+    }
+
+    func start(_ record: Download, resumeData: Data?, completion: @escaping (BrowserDownloadTask?) -> Void) {
+        // This gate MUST precede either WebKit invocation. Resume blobs can
+        // contain authenticated requests; checking the returned task is too late.
+        guard DownloadSafety.canResume(downloadProfileID: record.profileID, taskProfileID: profileScopeID) else {
+            completion(nil)
+            return
+        }
+        let pendingID = UUID()
+        activity.begin(pendingID)
+        pending[record.id] = pendingID
+        let received: @MainActor @Sendable (WKDownload) -> Void = { [self] download in
+            let task = BrowserDownloadTask(
+                download: download, originalURL: record.originalURL,
+                pageURL: record.pageURLString.flatMap(URL.init(string:)), profileScopeID: profileScopeID
+            )
+            guard pending[record.id] == pendingID else {
+                task.cancel()
+                completion(nil)
+                return
+            }
+            pending.removeValue(forKey: record.id)
+            configure(task)
+            activity.end(pendingID)
+            completion(task)
+        }
+        if let resumeData {
+            webView.resumeDownload(fromResumeData: resumeData, completionHandler: received)
+        } else {
+            webView.startDownload(using: URLRequest(url: record.originalURL), completionHandler: received)
+        }
+    }
+
+    func cancelPending(_ recordID: UUID) {
+        if let pendingID = pending.removeValue(forKey: recordID) {
+            activity.end(pendingID)
+        }
+    }
+}

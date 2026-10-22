@@ -1,4 +1,5 @@
 import CoreServices
+import Darwin
 import Foundation
 @testable import Ora
 import Testing
@@ -61,6 +62,10 @@ struct DownloadSafetyTests {
         let file = dir.appendingPathComponent("payload.bin")
         try Data("payload".utf8).write(to: file)
 
+        // A sandboxed writer can inherit quarantine immediately. Establish a
+        // known absent state explicitly before testing the writer branch.
+        _ = removexattr(file.path, "com.apple.quarantine", XATTR_NOFOLLOW)
+        #expect(DownloadSafety.rawQuarantine(file) == nil)
         let outcome = DownloadSafety.applyQuarantine(
             to: file,
             source: URL(string: "https://example.com/payload.bin"),
@@ -68,7 +73,8 @@ struct DownloadSafetyTests {
         )
         #expect(outcome.verified)
         #expect(DownloadSafety.hasQuarantine(file))
-        #expect(DownloadSafety.quarantineType(file) == (kLSQuarantineTypeWebDownload as String))
+        #expect(DownloadSafety.rawQuarantine(file)?.isEmpty == false)
+        #expect(!outcome.preservedExisting)
     }
 
     @Test func existingQuarantineIsPreservedNotOverwritten() throws {
@@ -79,14 +85,16 @@ struct DownloadSafetyTests {
         let file = dir.appendingPathComponent("payload.bin")
         try Data("payload".utf8).write(to: file)
 
-        let first = DownloadSafety.applyQuarantine(to: file, source: URL(string: "https://a.example/x"), page: nil)
-        #expect(first.verified)
-        #expect(!first.preservedExisting)
-
-        let second = DownloadSafety.applyQuarantine(to: file, source: URL(string: "https://b.example/y"), page: nil)
-        #expect(second.verified)
-        #expect(second.preservedExisting)
-        #expect(DownloadSafety.hasQuarantine(file))
+        let stronger = Data("0083;12345678;Fixture Browser;11111111-1111-1111-1111-111111111111".utf8)
+        let setResult = stronger.withUnsafeBytes {
+            setxattr(file.path, "com.apple.quarantine", $0.baseAddress, stronger.count, 0, XATTR_NOFOLLOW)
+        }
+        try #require(setResult == 0)
+        try #require(DownloadSafety.rawQuarantine(file) == stronger)
+        let outcome = DownloadSafety.applyQuarantine(to: file, source: URL(string: "https://b.example/y"), page: nil)
+        #expect(outcome.verified)
+        #expect(outcome.preservedExisting)
+        #expect(DownloadSafety.rawQuarantine(file) == stronger)
     }
 
     @Test func resumeRequiresMatchingProfileScope() {

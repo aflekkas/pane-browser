@@ -15,7 +15,9 @@ final class BrowserPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
     /// exceptions and download resume. Retained from init.
     let profileIdentifier: UUID
     let isPrivateProfile: Bool
-
+    let privateSessionID: UUID
+    @MainActor lazy var authenticationSession = BrowserAuthenticationSession()
+    let downloadActivity = BrowserDownloadActivity()
     /// One app-run session identifier for certificate-exception scope.
     static let appSessionID = UUID().uuidString
 
@@ -67,6 +69,7 @@ final class BrowserPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
 
         profileIdentifier = profile.identifier
         isPrivateProfile = profile.isPrivate
+        privateSessionID = profile.privateSessionID
 
         let contentController = WKUserContentController()
         webConfiguration.userContentController = contentController
@@ -174,6 +177,7 @@ final class BrowserPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
     }
 
     func load(_ request: URLRequest) {
+        cancelAuthentication()
         guard isReadyForNavigation else {
             pendingLoadRequest = request
             pendingReload = false
@@ -184,6 +188,7 @@ final class BrowserPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
     }
 
     func reload() {
+        cancelAuthentication()
         guard isReadyForNavigation else {
             pendingReload = true
             pendingLoadRequest = nil
@@ -194,14 +199,17 @@ final class BrowserPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
     }
 
     func goBack() {
+        cancelAuthentication()
         webView.goBack()
     }
 
     func goForward() {
+        cancelAuthentication()
         webView.goForward()
     }
 
     func stopLoading() {
+        cancelAuthentication()
         webView.stopLoading()
     }
 
@@ -274,6 +282,8 @@ final class BrowserPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
     }
 
     func teardown() {
+        cancelAuthentication()
+        downloadActivity.clear()
         passwordTracker.invalidate()
         urlObservation?.invalidate()
         urlObservation = nil
@@ -385,7 +395,7 @@ final class BrowserPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
 
         switch delegate?.browserPage(self, decidePolicyFor: action) ?? .allow {
         case .allow:
-            decisionHandler(.allow)
+            decisionHandler(navigationAction.shouldPerformDownload ? .download : .allow)
         case .cancel:
             decisionHandler(.cancel)
         case .openInNewTab:
@@ -397,6 +407,7 @@ final class BrowserPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
     }
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+        cancelAuthentication()
         // Any new navigation — including same-URL reload — retires the
         // previous document for password purposes immediately, while the
         // navigation is still in progress.
@@ -497,7 +508,9 @@ final class BrowserPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
         decidePolicyFor navigationResponse: WKNavigationResponse,
         decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void
     ) {
-        if navigationResponse.canShowMIMEType {
+        let disposition = (navigationResponse.response as? HTTPURLResponse)?
+            .value(forHTTPHeaderField: "Content-Disposition")?.lowercased() ?? ""
+        if navigationResponse.canShowMIMEType, !disposition.hasPrefix("attachment") {
             isDownloadNavigation = false
             originalURL = nil
             decisionHandler(.allow)

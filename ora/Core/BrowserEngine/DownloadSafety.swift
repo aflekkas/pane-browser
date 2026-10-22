@@ -1,3 +1,5 @@
+import Darwin
+
 // spec: §6 (Pane boring floor — downloads)
 import Foundation
 
@@ -89,7 +91,8 @@ enum DownloadSafety {
     static func uniqueDestination(
         in directory: URL,
         suggestedFilename: String?,
-        fileManager: FileManager = .default
+        fileManager: FileManager = .default,
+        reserved: Set<URL> = []
     ) -> URL {
         let safeName = sanitizedFilename(suggestedFilename)
         let dir = directory.standardizedFileURL
@@ -102,7 +105,9 @@ enum DownloadSafety {
         let base = nsName.deletingPathExtension
         let ext = nsName.pathExtension
         var counter = 1
-        while fileManager.fileExists(atPath: candidate.path) {
+        // attributesOfItem sees dangling symlinks too; fileExists follows
+        // them and would accidentally hand WebKit an occupied path.
+        while reserved.contains(candidate) || (try? fileManager.attributesOfItem(atPath: candidate.path)) != nil {
             let next = ext.isEmpty ? "\(base) (\(counter))" : "\(base) (\(counter)).\(ext)"
             candidate = dir.appendingPathComponent(next)
             counter += 1
@@ -162,8 +167,19 @@ enum DownloadSafety {
 
     /// Verifiable from outside the app via `xattr -p com.apple.quarantine`.
     static func hasQuarantine(_ url: URL) -> Bool {
-        (try? url.resourceValues(forKeys: [.quarantinePropertiesKey]))?
-            .quarantineProperties != nil
+        rawQuarantine(url) != nil
+    }
+
+    /// The on-disk xattr is the security evidence. LaunchServices may not
+    /// return a quarantine dictionary/type for files absent from its DB.
+    static func rawQuarantine(_ url: URL) -> Data? {
+        let length = getxattr(url.path, "com.apple.quarantine", nil, 0, 0, XATTR_NOFOLLOW)
+        guard length > 0 else { return nil }
+        var bytes = Data(count: length)
+        let count = bytes.withUnsafeMutableBytes {
+            getxattr(url.path, "com.apple.quarantine", $0.baseAddress, length, 0, XATTR_NOFOLLOW)
+        }
+        return count == length ? bytes : nil
     }
 
     static func quarantineType(_ url: URL) -> String? {

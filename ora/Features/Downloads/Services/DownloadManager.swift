@@ -25,12 +25,16 @@ class DownloadManager: ObservableObject {
     private var taskDestinationURLs: [UUID: URL] = [:]
     private var progressTimers: [UUID: Timer] = [:]
     weak var toastManager: ToastManager?
-    /// Set by the tab layer (integration patch) to resume via the owning
-    /// `WKWebView`. Receives the record so it can select a web view from
-    /// the same profile/Space; the returned task must carry that scope in
-    /// `profileScopeID` or resumption is refused. Nil falls back to
-    /// re-opening the URL.
-    var resumeTaskProvider: ((Download) -> BrowserDownloadTask?)?
+    private var downloadSessions: [String: DownloadTransferSession] = [:]
+    private var pendingRetries: [UUID: UUID] = [:]
+    private var pendingCancellations: Set<UUID> = []
+    private static var reservedDestinations: Set<URL> = []
+    /// Tests use an isolated real directory; production uses ~/Downloads.
+    var downloadsDirectory: URL?
+
+    func registerDownloadSession(_ session: DownloadTransferSession) {
+        downloadSessions[session.profileScopeID] = session
+    }
 
     init(
         modelContainer: ModelContainer,
@@ -52,7 +56,7 @@ class DownloadManager: ObservableObject {
                 !ephemeralDownloads.contains { $0.id == persisted.id }
             }
             self.recentDownloads = Array(merged.prefix(50))
-            self.activeDownloads = merged.filter { $0.status == .downloading }
+            self.activeDownloads = merged.filter { $0.status == .downloading || $0.status == .pending }
         } catch {
             // Failed to load downloads
         }
@@ -145,10 +149,16 @@ class DownloadManager: ObservableObject {
 
     func cancelDownload(_ download: Download) {
         let fileName = download.fileName
+        pendingRetries.removeValue(forKey: download.id)
+        if let scope = download.profileID {
+            downloadSessions[scope]?.cancelPending(download.id)
+        }
         if let downloadTask = activeDownloadTasks[download.id] {
+            pendingCancellations.insert(download.id)
             // Capture resume data so Retry can resume instead of restarting.
             downloadTask.cancel { [weak self] resumeData in
                 Task { @MainActor in
+                    self?.pendingCancellations.remove(download.id)
                     if let resumeData {
                         download.resumeData = resumeData
                         try? self?.modelContext.save()
@@ -169,7 +179,7 @@ class DownloadManager: ObservableObject {
         toastManager?.show("Download cancelled \(fileName)", type: .info, icon: .system("xmark.circle"))
     }
 
-    func handleDownload(_ task: BrowserDownloadTask) {
+    func handleDownload(_ task: BrowserDownloadTask, reusing record: Download? = nil) {
         task.onDestinationRequest = { [weak self] response, suggestedFilename, completion in
             guard let self else {
                 completion(nil)
@@ -179,15 +189,20 @@ class DownloadManager: ObservableObject {
             let downloadsDir = self.getDownloadsDirectory()
             // Untrusted filename: sanitise, contain, and uniquify. Never
             // use `suggestedFilename` as a path verbatim.
-            let finalURL = DownloadSafety.uniqueDestination(in: downloadsDir, suggestedFilename: suggestedFilename)
+            let finalURL = DownloadSafety.uniqueDestination(
+                in: downloadsDir, suggestedFilename: suggestedFilename, reserved: Self.reservedDestinations
+            )
+            Self.reservedDestinations.insert(finalURL)
             let expectedSize = response.expectedContentLength
-            let download = self.startDownload(
+            let download = record ?? self.startDownload(
                 from: task,
                 originalURL: task.originalURL,
                 suggestedFilename: finalURL.lastPathComponent,
                 expectedSize: expectedSize
             )
 
+            download.destinationURL = finalURL
+            self.activeDownloadTasks[download.id] = task
             self.taskDownloads[task.id] = download
             self.taskDestinationURLs[task.id] = finalURL
             self.startProgressTimer(for: task, download: download, expectedSize: expectedSize)
@@ -234,6 +249,7 @@ class DownloadManager: ObservableObject {
     @discardableResult
     func handleResumedDownload(_ task: BrowserDownloadTask, for download: Download) -> Bool {
         guard DownloadSafety.canResume(downloadProfileID: download.profileID, taskProfileID: task.profileScopeID) else {
+            task.cancel()
             NSLog("Pane: refused download resume from a different profile")
             return false
         }
@@ -245,43 +261,16 @@ class DownloadManager: ObservableObject {
         if !activeDownloads.contains(where: { $0.id == download.id }) {
             activeDownloads.append(download)
         }
-        // Reuse the normal wiring, but point its record lookup at the
-        // existing download instead of creating a new one on destination.
-        let expectedSize = download.fileSize
-        task.onDestinationRequest = { [weak self] _, _, completion in
-            guard let self else {
-                completion(nil)
-                return
-            }
-            let downloadsDir = self.getDownloadsDirectory()
-            let finalURL = DownloadSafety.uniqueDestination(in: downloadsDir, suggestedFilename: download.fileName)
-            self.activeDownloadTasks[download.id] = task
-            self.taskDownloads[task.id] = download
-            self.taskDestinationURLs[task.id] = finalURL
-            self.startProgressTimer(for: task, download: download, expectedSize: expectedSize)
-            completion(finalURL)
+        // Resumption normally uses WebKit's embedded destination without asking
+        // for one again. Install ALL tracking before returning to WebKit.
+        handleDownload(task, reusing: download)
+        activeDownloadTasks[download.id] = task
+        taskDownloads[task.id] = download
+        if let destination = download.destinationURL {
+            taskDestinationURLs[task.id] = destination
+            Self.reservedDestinations.insert(destination)
         }
-        task.onRedirect = { [weak self] newURL in
-            download.originalURL = newURL
-            download.originalURLString = newURL.absoluteString
-            try? self?.modelContext.save()
-        }
-        task.onFinish = { [weak self] in
-            guard let self,
-                  let destinationURL = self.taskDestinationURLs[task.id]
-            else { return }
-            download.quarantineVerified = Self.applyQuarantine(
-                to: destinationURL,
-                source: download.originalURL,
-                page: task.pageURL
-            )
-            self.completeDownload(download, destinationURL: destinationURL)
-            self.cleanupTask(task.id)
-        }
-        task.onFail = { [weak self] error, resumeData in
-            self?.failDownload(download, error: error.localizedDescription, resumeData: resumeData)
-            self?.cleanupTask(task.id)
-        }
+        startProgressTimer(for: task, download: download, expectedSize: download.fileSize)
         refreshRecentDownloads()
         return true
     }
@@ -312,7 +301,7 @@ class DownloadManager: ObservableObject {
 
     func deleteDownload(_ download: Download) {
         // If it's an active download, cancel it first
-        if download.status == .downloading {
+        if download.status == .downloading || download.status == .pending {
             cancelDownload(download)
         }
 
@@ -343,20 +332,41 @@ class DownloadManager: ObservableObject {
         deleteDownload(download)
     }
 
-    /// Resumes from in-memory (never persisted) resume data when possible;
-    /// otherwise re-opens the original URL to re-trigger the download.
+    /// A retry is one asynchronous operation in the originating data store.
+    /// Legacy records without a proven owner fail closed; they cannot safely
+    /// inherit the focused window's profile or private identity.
     func retryDownload(_ download: Download) {
-        if download.resumeData != nil,
-           let task = resumeTaskProvider?(download),
-           handleResumedDownload(task, for: download)
-        {
-            return
+        guard pendingRetries[download.id] == nil,
+              !pendingCancellations.contains(download.id),
+              download.status == .failed || download.status == .cancelled,
+              let scope = download.profileID,
+              let session = downloadSessions[scope],
+              DownloadSafety.canResume(downloadProfileID: scope, taskProfileID: session.profileScopeID)
+        else { return }
+        let operationID = UUID()
+        pendingRetries[download.id] = operationID
+        download.status = .pending
+        download.isActive = true
+        refreshRecentDownloads()
+        let resumeData = download.destinationURL == nil ? nil : download.resumeData
+        let once = OnceCompletion<BrowserDownloadTask?> { [weak self] task in
+            MainActor.assumeIsolated {
+                guard let self, self.pendingRetries[download.id] == operationID else {
+                    task?.cancel()
+                    return
+                }
+                self.pendingRetries.removeValue(forKey: download.id)
+                guard let task else {
+                    self.failDownload(download, error: "The original download session is unavailable.")
+                    return
+                }
+                if resumeData == nil {
+                    download.destinationURL = nil
+                }
+                self.handleResumedDownload(task, for: download)
+            }
         }
-        guard let url = URL(string: download.originalURLString) else { return }
-        deleteDownload(download)
-        if let window = NSApp.keyWindow {
-            NotificationCenter.default.post(name: .openURL, object: window, userInfo: ["url": url])
-        }
+        session.start(download, resumeData: resumeData) { once.call($0) }
     }
 
     private func refreshRecentDownloads() {
@@ -365,6 +375,9 @@ class DownloadManager: ObservableObject {
 
     /// Helper to get default downloads directory
     func getDownloadsDirectory() -> URL {
+        if let downloadsDirectory {
+            return downloadsDirectory
+        }
         return FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask)
             .first ?? URL(fileURLWithPath: NSHomeDirectory())
     }
@@ -428,7 +441,13 @@ class DownloadManager: ObservableObject {
     private func cleanupTask(_ taskID: UUID) {
         progressTimers[taskID]?.invalidate()
         progressTimers.removeValue(forKey: taskID)
-        taskDownloads.removeValue(forKey: taskID)
-        taskDestinationURLs.removeValue(forKey: taskID)
+        if let record = taskDownloads.removeValue(forKey: taskID),
+           let task = activeDownloadTasks[record.id], task.id == taskID
+        {
+            task.clearCallbacks()
+        }
+        if let url = taskDestinationURLs.removeValue(forKey: taskID) {
+            Self.reservedDestinations.remove(url)
+        }
     }
 }
