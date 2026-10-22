@@ -340,11 +340,17 @@ class DownloadManager: ObservableObject {
     /// Legacy records without a proven owner fail closed; they cannot safely
     /// inherit the focused window's profile or private identity.
     func retryDownload(_ download: Download) {
-        guard canRetryDownload(download),
-              let scope = download.profileID,
-              let session = downloadSessions[scope],
+        guard canRetryDownload(download) else { return }
+        guard let scope = download.profileID,
+              let session = resolveDownloadSession(scope: scope),
               DownloadSafety.canResume(downloadProfileID: scope, taskProfileID: session.profileScopeID)
-        else { return }
+        else {
+            failDownload(
+                download,
+                error: "The original Space or private session is unavailable. Open the download link in a Space to start again."
+            )
+            return
+        }
         let operationID = UUID()
         pendingRetries[download.id] = operationID
         download.status = .pending
@@ -369,6 +375,20 @@ class DownloadManager: ObservableObject {
             }
         }
         session.start(download, resumeData: resumeData) { once.call($0) }
+    }
+
+    private func resolveDownloadSession(scope: String) -> DownloadTransferSession? {
+        if let session = downloadSessions[scope] {
+            return session
+        }
+        // A UUID alone is not proof of ownership. Require an existing regular
+        // Space; nil/legacy/deleted owners and lost private sessions fail closed.
+        guard let identifier = UUID(uuidString: scope), identifier.uuidString == scope,
+              let spaces = try? modelContext.fetch(FetchDescriptor<TabContainer>()),
+              spaces.contains(where: { $0.id == identifier }) else { return nil }
+        let session = BrowserDownloadSession(restoringRegularProfile: identifier, window: NSApp.keyWindow)
+        registerDownloadSession(session)
+        return session
     }
 
     private func refreshRecentDownloads() {

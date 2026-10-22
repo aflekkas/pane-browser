@@ -22,23 +22,35 @@ final class BrowserDownloadTask: NSObject, WKDownloadDelegate {
     var onCancelAuthentication: (() -> Void)?
     private(set) var lastResumeData: Data?
 
-    private let download: WKDownload
+    let progress: Progress
+    private let cancelTransfer: (@escaping (Data?) -> Void) -> Void
 
-    init(
+    convenience init(
         download: WKDownload, originalURL: URL, pageURL: URL? = nil,
         profileScopeID: String? = nil, isResumed: Bool = false
     ) {
-        self.download = download
+        self.init(
+            originalURL: originalURL, pageURL: pageURL, profileScopeID: profileScopeID,
+            isResumed: isResumed, progress: download.progress,
+            cancelTransfer: { completion in download.cancel { completion($0) } }
+        )
+        download.delegate = self
+    }
+
+    /// The cancellation operation is injectable so its asynchronous lifetime
+    /// can be tested without subclassing or swizzling WebKit.
+    init(
+        originalURL: URL, pageURL: URL? = nil, profileScopeID: String? = nil,
+        isResumed: Bool = false, progress: Progress,
+        cancelTransfer: @escaping (@escaping (Data?) -> Void) -> Void
+    ) {
         self.isResumed = isResumed
         self.originalURL = originalURL
         self.pageURL = pageURL
         self.profileScopeID = profileScopeID
+        self.progress = progress
+        self.cancelTransfer = cancelTransfer
         super.init()
-        self.download.delegate = self
-    }
-
-    var progress: Progress {
-        download.progress
     }
 
     func clearCallbacks() {
@@ -54,7 +66,7 @@ final class BrowserDownloadTask: NSObject, WKDownloadDelegate {
         onCancelAuthentication?()
         onCancelAuthentication = nil
         activity?.end(id)
-        download.cancel { _ in }
+        cancelTransfer { _ in }
     }
 
     /// Cancelling via this variant surfaces resume data so the download can
@@ -64,8 +76,11 @@ final class BrowserDownloadTask: NSObject, WKDownloadDelegate {
         onCancelAuthentication = nil
         activity?.end(id)
         let once = OnceCompletion(completionHandler)
-        download.cancel { [weak self] resumeData in
-            let usableData = self?.isResumed == false ? resumeData : nil
+        // WebKit keeps its delegate weakly. The manager releases this wrapper
+        // immediately after cancel, so the decision cannot depend on its lifetime.
+        let mayResume = !isResumed
+        cancelTransfer { [weak self] resumeData in
+            let usableData = mayResume ? resumeData : nil
             self?.lastResumeData = usableData
             once.call(usableData)
         }

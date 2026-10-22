@@ -54,6 +54,12 @@ struct DownloadHistoryRow: View {
                 if download.status == .downloading {
                     progressBar
                 }
+                if download.status == .failed, let error = download.error {
+                    Text(error)
+                        .font(.system(size: 10))
+                        .foregroundColor(theme.destructive)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
 
             if isHovered {

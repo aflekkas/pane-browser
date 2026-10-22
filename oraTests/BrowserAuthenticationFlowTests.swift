@@ -190,7 +190,12 @@ extension BrowserAuthenticationFlowTests {
         try await harness.wait("request reached auth fixture") { !fixture.requests.isEmpty }
         try await harness.wait("unowned challenge resolves") { !harness.page.isLoading }
         #expect(harness.window.attachedSheet == nil)
-        #expect(harness.page.lastCommittedURL?.path != "/auth")
+        // WebKit may commit the empty 401 response at /auth. The security
+        // invariant is that no credentials or authenticated body are delivered.
+        #expect(!fixture.requests.contains { $0.lowercased().contains("authorization:") })
+        #expect(harness.page.authenticationSession.activeOperation == nil)
+        let body = try await harness.page.webView.evaluateJavaScript("document.body.innerText") as? String
+        #expect(body?.contains("HTML") != true)
     }
 }
 

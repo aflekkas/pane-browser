@@ -8,7 +8,18 @@ final class DownloadFlowFixture {
     private let queue = DispatchQueue(label: "DownloadFlowFixture")
     private var connections: [NWConnection] = []
     private var received: [String] = []
-    static let payload = Data(repeating: 0x5A, count: 2 * 1024 * 1024)
+    /// Reproducible nonuniform bytes: shifted/duplicated ranges must fail even
+    /// when their total length happens to be correct.
+    static let payload: Data = {
+        var state: UInt32 = 0xC0FFEE
+        return Data((0 ..< (2 * 1024 * 1024)).map { _ in
+            state ^= state << 13
+            state ^= state >> 17
+            state ^= state << 5
+            return UInt8(truncatingIfNeeded: state)
+        })
+    }()
+
     var requests: [String] {
         queue.sync { received }
     }

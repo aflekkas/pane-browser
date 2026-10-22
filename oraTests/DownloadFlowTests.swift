@@ -205,6 +205,10 @@ extension DownloadFlowTests {
         #expect(harness.manager.recentDownloads.count == 1)
         #expect(fixture.requests.count == requestCount + 1)
         #expect(fixture.requests.last?.lowercased().contains("range: bytes=") == true)
+        let destination = try #require(record.destinationURL)
+        let bytes = try Data(contentsOf: destination)
+        #expect(bytes.count == DownloadFlowFixture.payload.count)
+        #expect(bytes == DownloadFlowFixture.payload)
         #expect(record.quarantineVerified)
         #expect(harness.manager.isEphemeral(record))
     }
