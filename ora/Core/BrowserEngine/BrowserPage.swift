@@ -15,6 +15,12 @@ final class BrowserPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
     private var isReadyForNavigation = false
     private var pendingLoadRequest: URLRequest?
     private var pendingReload = false
+    /// Monotonic document generation for the password bridge. Bumped on
+    /// every provisional navigation and teardown so a captured fill/message
+    /// context from a previous document can never match again — including
+    /// a same-URL reload.
+    private(set) var passwordNavigationGeneration = 0
+    private var passwordDocumentToken: String?
 
     init(
         profile: BrowserEngineProfile,
@@ -193,7 +199,33 @@ final class BrowserPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
         webView.closeAllMediaPresentations(completionHandler: completion)
     }
 
+    /// Current password-bridge document context, or `nil` when no document
+    /// has registered (fail closed). Equality covers page instance,
+    /// generation, full origin, document URL, and document token.
+    func currentPasswordContext() -> PasswordDocumentContext? {
+        guard let documentURL = webView.url ?? lastCommittedURL,
+              let originKey = PasswordBridge.originKey(for: documentURL),
+              let passwordDocumentToken,
+              !passwordDocumentToken.isEmpty
+        else {
+            return nil
+        }
+        return PasswordDocumentContext(
+            pageIdentity: ObjectIdentifier(self),
+            generation: passwordNavigationGeneration,
+            originKey: originKey,
+            documentURL: documentURL,
+            documentToken: passwordDocumentToken
+        )
+    }
+
+    private func invalidatePasswordDocument() {
+        passwordNavigationGeneration += 1
+        passwordDocumentToken = nil
+    }
+
     func teardown() {
+        invalidatePasswordDocument()
         webView.stopLoading()
         webView.navigationDelegate = nil
         webView.uiDelegate = nil
@@ -262,14 +294,34 @@ final class BrowserPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
         let frameURL = message.frameInfo.request.url
         if isolatedMessageNames.contains(message.name) {
-            // Privileged bridge: validate against WebKit's own frame facts,
-            // never the JS payload. Drops subframe, cross-origin, and stale
-            // (pre-navigation) messages before any delegate sees them.
+            // Document registration: the isolated script announces its
+            // per-document token once at install. Accept it only from the
+            // main frame of the document WebKit currently displays; never
+            // forward it to the delegate.
+            if PasswordBridge.isBridgeReadyMessage(message.body) {
+                if message.frameInfo.isMainFrame,
+                   let frameURL,
+                   let currentURL = webView.url,
+                   PasswordBridge.isSameDocument(frameURL, currentURL),
+                   let token = PasswordBridge.payloadToken(from: message.body),
+                   !token.isEmpty
+                {
+                    passwordDocumentToken = token
+                }
+                return
+            }
+            // Privileged bridge: validate against WebKit's own frame facts
+            // and the registered document context, never the JS payload's
+            // claims. Drops subframe, cross-origin, forged-token, and
+            // stale/queued (pre-navigation or pre-reload) messages before
+            // any delegate sees them.
             guard PasswordBridge.isValidMessage(
                 isMainFrame: message.frameInfo.isMainFrame,
                 frameURL: frameURL,
                 pageURL: webView.url,
-                committedURL: lastCommittedURL
+                committedURL: lastCommittedURL,
+                payloadToken: PasswordBridge.payloadToken(from: message.body),
+                current: currentPasswordContext()
             ) else {
                 return
             }
@@ -310,6 +362,10 @@ final class BrowserPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
     }
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+        // Any new navigation — including same-URL reload — retires the
+        // previous document for password purposes immediately, while the
+        // navigation is still in progress.
+        invalidatePasswordDocument()
         if !isDownloadNavigation {
             originalURL = lastCommittedURL
             emitNavigationEvent(

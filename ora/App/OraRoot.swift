@@ -41,7 +41,9 @@ struct OraRoot: View {
             container = try ModelConfiguration.createOraContainer(isPrivate: isPrivate)
             modelContext = ModelContext(container)
         } catch {
-            deleteSwiftDataStore("OraData.sqlite")
+            // Never delete the store on open failure: the file may hold the
+            // user's only copy of their spaces/history, and a transient
+            // error (locked file, permissions) must not become data loss.
             fatalError("Failed to initialize ModelContainer: \(error)")
         }
 

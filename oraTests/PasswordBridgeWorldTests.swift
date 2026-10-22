@@ -44,6 +44,7 @@ struct PasswordBridgeWorldTests {
 
         _ = try await harness.evaluatePage("document.getElementById('pw').focus(); true")
         let focus = try await harness.waitForFocusMessage()
+        let context = try await harness.waitForContext()
 
         let payload: [String: Any] = [
             "usernameFieldID": focus.usernameFieldID ?? "",
@@ -51,7 +52,8 @@ struct PasswordBridgeWorldTests {
             "username": Self.dummyUsername,
             "password": Self.dummyPassword,
             "highlightColor": "#E8F5E9",
-            "submitAfterFill": false
+            "submitAfterFill": false,
+            "documentToken": context.documentToken
         ]
         let payloadJSON = try #require(String(
             data: JSONSerialization.data(withJSONObject: payload),
@@ -76,55 +78,195 @@ struct PasswordBridgeWorldTests {
         let harness = BrowserHarness()
         try await harness.load(fixture.mainURL)
 
-        _ = try await harness.evaluatePage(
+        // Non-vacuous: the subframe form must actually exist and be
+        // focusable, and the focus must land inside the subframe document.
+        let focused = try await harness.evaluatePage(
             """
             (() => {
                 const doc = document.querySelector('iframe').contentDocument;
                 const field = doc && doc.querySelector('input[type=password]');
-                if (field) { field.focus(); }
-                return !!field;
+                if (!field) { return 'missing'; }
+                field.focus();
+                return doc.activeElement === field ? 'focused' : 'not-focused';
             })()
             """
-        )
+        ) as? String
+        #expect(focused == "focused")
+
+        // Explicitly attempt to invoke the isolated handler from inside
+        // the same-origin subframe's own page world: it must not exist
+        // there (the handler lives only in the isolated main-frame world).
+        let subframeSeesHandler = try await harness.evaluatePage(
+            """
+            (() => {
+                const win = document.querySelector('iframe').contentWindow;
+                try {
+                    return !!(win.webkit && win.webkit.messageHandlers
+                        && win.webkit.messageHandlers.passwordManager);
+                } catch (error) { return false; }
+            })()
+            """
+        ) as? Bool
+        #expect(subframeSeesHandler == false)
+
         // Give any (incorrect) subframe delivery time to arrive.
         try await Task.sleep(for: .milliseconds(1500))
         #expect(harness.recorder.passwordMessages.isEmpty)
+    }
+
+    @Test func staleTokenFillAfterSameURLReloadDoesNotWrite() async throws {
+        let fixture = try FixtureSite.loginPage()
+        let harness = BrowserHarness()
+        try await harness.load(fixture.mainURL)
+
+        _ = try await harness.evaluatePage("document.getElementById('pw').focus(); true")
+        let focus = try await harness.waitForFocusMessage()
+        let oldContext = try await harness.waitForContext()
+
+        // Same-URL reload: new document, new generation, new token.
+        let focusCountBeforeReload = harness.focusMessageCount
+        try await harness.reload()
+        _ = try await harness.evaluatePage("document.getElementById('pw').focus(); true")
+        _ = try await harness.waitForFocusMessage(afterCount: focusCountBeforeReload)
+        let newContext = try await harness.waitForContext()
+        #expect(newContext != oldContext)
+        #expect(newContext.documentToken != oldContext.documentToken)
+        #expect(newContext.generation != oldContext.generation)
+
+        // A fill request minted for the pre-reload document (the delayed-
+        // auth case) must not write into the new document.
+        try await harness.fill(focus: focus, token: oldContext.documentToken)
+        let afterStaleFill = try await harness.evaluatePage(
+            "document.getElementById('pw').value"
+        ) as? String
+        #expect(afterStaleFill == "")
+
+        // The current document's token still fills.
+        try await harness.fill(focus: focus, token: newContext.documentToken)
+        let afterFreshFill = try await harness.evaluatePage(
+            "document.getElementById('pw').value"
+        ) as? String
+        #expect(afterFreshFill == Self.dummyPassword)
     }
 
     @Test func validatorRejectsSubframeForgedAndStaleContexts() throws {
         let page = try #require(URL(string: "https://example.com/login"))
         let otherOrigin = try #require(URL(string: "https://evil.example.net/login"))
         let navigated = try #require(URL(string: "https://example.com/other"))
+        let downgraded = try #require(URL(string: "http://example.com/login"))
+        let otherPort = try #require(URL(string: "https://example.com:8443/login"))
+        let owner = NSObject()
+        let context = try PasswordDocumentContext(
+            pageIdentity: ObjectIdentifier(owner),
+            generation: 3,
+            originKey: #require(PasswordBridge.originKey(for: page)),
+            documentURL: page,
+            documentToken: "token-current"
+        )
 
         #expect(PasswordBridge.isValidMessage(
-            isMainFrame: true, frameURL: page, pageURL: page, committedURL: page
+            isMainFrame: true, frameURL: page, pageURL: page, committedURL: page,
+            payloadToken: "token-current", current: context
         ))
         // Subframe: never valid, even same-origin.
         #expect(!PasswordBridge.isValidMessage(
-            isMainFrame: false, frameURL: page, pageURL: page, committedURL: page
+            isMainFrame: false, frameURL: page, pageURL: page, committedURL: page,
+            payloadToken: "token-current", current: context
         ))
         // Forged: frame origin disagrees with the native page URL.
         #expect(!PasswordBridge.isValidMessage(
-            isMainFrame: true, frameURL: otherOrigin, pageURL: page, committedURL: page
+            isMainFrame: true, frameURL: otherOrigin, pageURL: page, committedURL: page,
+            payloadToken: "token-current", current: context
         ))
-        // Stale: message from the pre-navigation page after commit moved on.
+        // Stale: same-origin but different document (/login vs /other).
         #expect(!PasswordBridge.isValidMessage(
-            isMainFrame: true, frameURL: page, pageURL: navigated, committedURL: navigated
+            isMainFrame: true, frameURL: page, pageURL: navigated, committedURL: navigated,
+            payloadToken: "token-current", current: context
         ))
-        // Missing native facts fail closed.
+        // Queued old-document message: correct origin/document, old token.
         #expect(!PasswordBridge.isValidMessage(
-            isMainFrame: true, frameURL: nil, pageURL: page, committedURL: page
+            isMainFrame: true, frameURL: page, pageURL: page, committedURL: page,
+            payloadToken: "token-previous-document", current: context
+        ))
+        // Scheme downgrade and port change are different origins.
+        #expect(!PasswordBridge.isValidMessage(
+            isMainFrame: true, frameURL: downgraded, pageURL: downgraded, committedURL: downgraded,
+            payloadToken: "token-current", current: context
+        ))
+        #expect(!PasswordBridge.isValidMessage(
+            isMainFrame: true, frameURL: otherPort, pageURL: otherPort, committedURL: otherPort,
+            payloadToken: "token-current", current: context
+        ))
+        // Missing provenance fails closed: no token, no committed URL,
+        // no registered document, no frame URL.
+        #expect(!PasswordBridge.isValidMessage(
+            isMainFrame: true, frameURL: page, pageURL: page, committedURL: page,
+            payloadToken: nil, current: context
+        ))
+        #expect(!PasswordBridge.isValidMessage(
+            isMainFrame: true, frameURL: page, pageURL: page, committedURL: nil,
+            payloadToken: "token-current", current: context
+        ))
+        #expect(!PasswordBridge.isValidMessage(
+            isMainFrame: true, frameURL: page, pageURL: page, committedURL: page,
+            payloadToken: "token-current", current: nil
+        ))
+        #expect(!PasswordBridge.isValidMessage(
+            isMainFrame: true, frameURL: nil, pageURL: page, committedURL: page,
+            payloadToken: "token-current", current: context
         ))
     }
 
-    @Test func fillContextRejectsNavigationAwayFromOverlayOrigin() throws {
-        let overlayHost = "example.com"
-        let same = try #require(URL(string: "https://example.com/account"))
-        let moved = try #require(URL(string: "https://evil.example.net/account"))
-
-        #expect(PasswordBridge.isFillContextValid(currentURL: same, overlayHostname: overlayHost))
-        #expect(!PasswordBridge.isFillContextValid(currentURL: moved, overlayHostname: overlayHost))
-        #expect(!PasswordBridge.isFillContextValid(currentURL: nil, overlayHostname: overlayHost))
+    @Test func fillContextEqualityCoversPageGenerationOriginAndToken() throws {
+        let owner = NSObject()
+        let page = try #require(URL(string: "https://example.com/login"))
+        let base = PasswordDocumentContext(
+            pageIdentity: ObjectIdentifier(owner),
+            generation: 1,
+            originKey: "https://example.com",
+            documentURL: page,
+            documentToken: "token-a"
+        )
+        // Identical context (nothing navigated) remains valid.
+        #expect(base == PasswordDocumentContext(
+            pageIdentity: ObjectIdentifier(owner),
+            generation: 1,
+            originKey: "https://example.com",
+            documentURL: page,
+            documentToken: "token-a"
+        ))
+        // Same origin, different document/generation (delayed auth across
+        // a navigation or reload) must not match.
+        #expect(base != PasswordDocumentContext(
+            pageIdentity: ObjectIdentifier(owner),
+            generation: 2,
+            originKey: "https://example.com",
+            documentURL: page,
+            documentToken: "token-b"
+        ))
+        // HTTPS -> HTTP and port change change the origin key.
+        #expect(base != PasswordDocumentContext(
+            pageIdentity: ObjectIdentifier(owner),
+            generation: 1,
+            originKey: "http://example.com",
+            documentURL: page,
+            documentToken: "token-a"
+        ))
+        #expect(base != PasswordDocumentContext(
+            pageIdentity: ObjectIdentifier(owner),
+            generation: 1,
+            originKey: "https://example.com:8443",
+            documentURL: page,
+            documentToken: "token-a"
+        ))
+        // Page replacement: different BrowserPage identity never matches.
+        #expect(base != PasswordDocumentContext(
+            pageIdentity: ObjectIdentifier(NSObject()),
+            generation: 1,
+            originKey: "https://example.com",
+            documentURL: page,
+            documentToken: "token-a"
+        ))
     }
 }
 
@@ -188,13 +330,53 @@ private final class BrowserHarness {
         }
     }
 
-    func waitForFocusMessage() async throws -> FocusMessage {
+    func waitForFocusMessage(afterCount: Int = 0) async throws -> FocusMessage {
         var found: FocusMessage?
         try await waitUntil { [recorder] in
-            found = recorder.focusMessages.last
+            let messages = recorder.focusMessages
+            if messages.count > afterCount {
+                found = messages[afterCount]
+            }
             return found != nil
         }
         return try #require(found)
+    }
+
+    var focusMessageCount: Int {
+        recorder.focusMessages.count
+    }
+
+    func waitForContext() async throws -> PasswordDocumentContext {
+        var found: PasswordDocumentContext?
+        try await waitUntil { [page] in
+            found = page.currentPasswordContext()
+            return found != nil
+        }
+        return try #require(found)
+    }
+
+    func reload() async throws {
+        page.reload()
+        try await waitUntil { [page] in !page.isLoading }
+    }
+
+    func fill(focus: FocusMessage, token: String) async throws {
+        let payload: [String: Any] = [
+            "usernameFieldID": focus.usernameFieldID ?? "",
+            "passwordFieldIDs": focus.passwordFieldIDs,
+            "username": "fixture-user@example.invalid",
+            "password": "fixture-dummy-value",
+            "highlightColor": "#E8F5E9",
+            "submitAfterFill": false,
+            "documentToken": token
+        ]
+        let payloadJSON = try #require(String(
+            data: JSONSerialization.data(withJSONObject: payload),
+            encoding: .utf8
+        ))
+        _ = try await evaluatePassword(
+            "window.__oraPasswordManager.fillCredentials(\(payloadJSON)); true"
+        )
     }
 
     private func waitUntil(_ condition: @MainActor () -> Bool) async throws {

@@ -70,6 +70,10 @@ struct PasswordFillRequest: Codable {
     let password: String
     let highlightColor: String
     let submitAfterFill: Bool
+    /// Per-document token from the captured `PasswordDocumentContext`. The
+    /// isolated script refuses to write when it does not match its own
+    /// document, so a fill minted before a navigation/reload is inert.
+    let documentToken: String
 }
 
 enum PasswordAutofillSuggestion: Identifiable, Equatable {
@@ -106,6 +110,27 @@ struct PasswordAutofillOverlayState: Equatable {
     let emailSuggestions: [PasswordEmailSuggestion]
     let generatedPassword: String?
     let selectedSuggestionIndex: Int
+    /// Native document binding captured when the overlay was presented.
+    /// Compared (never trusted from JS) again at fill time. Defaulted so
+    /// pure suggestion-resolution constructions stay context-free; only
+    /// the presented overlay carries one, and fills fail closed without it.
+    var fillContext: PasswordDocumentContext?
+
+    init(
+        focus: PasswordBridgeFocusPayload,
+        savedPasswordEntries: [SavedPasswordSummary],
+        emailSuggestions: [PasswordEmailSuggestion],
+        generatedPassword: String?,
+        selectedSuggestionIndex: Int,
+        fillContext: PasswordDocumentContext? = nil
+    ) {
+        self.focus = focus
+        self.savedPasswordEntries = savedPasswordEntries
+        self.emailSuggestions = emailSuggestions
+        self.generatedPassword = generatedPassword
+        self.selectedSuggestionIndex = selectedSuggestionIndex
+        self.fillContext = fillContext
+    }
 
     var suggestions: [PasswordAutofillSuggestion] {
         var items: [PasswordAutofillSuggestion] = []
@@ -236,7 +261,8 @@ final class PasswordAutofillCoordinator {
                     username: entry.username.isEmpty ? nil : entry.username,
                     password: password,
                     highlightColor: "#E8F5E9",
-                    submitAfterFill: overlay.focus.action == .login && self.settings.passwordAutofillSubmitEnabled
+                    submitAfterFill: overlay.focus.action == .login && self.settings.passwordAutofillSubmitEnabled,
+                    documentToken: overlay.fillContext?.documentToken ?? ""
                 )
 
                 self.evaluate(scriptMethod: "fillCredentials", payload: request)
@@ -265,7 +291,8 @@ final class PasswordAutofillCoordinator {
             username: nil,
             password: generatedPassword,
             highlightColor: "#FFF4CC",
-            submitAfterFill: false
+            submitAfterFill: false,
+            documentToken: overlay.fillContext?.documentToken ?? ""
         )
 
         evaluate(scriptMethod: "fillCredentials", payload: request)
@@ -291,7 +318,8 @@ final class PasswordAutofillCoordinator {
             username: suggestion.email,
             password: "",
             highlightColor: "#E8F1FF",
-            submitAfterFill: false
+            submitAfterFill: false,
+            documentToken: overlay.fillContext?.documentToken ?? ""
         )
 
         evaluate(scriptMethod: "fillCredentials", payload: request)
@@ -350,7 +378,8 @@ final class PasswordAutofillCoordinator {
             savedPasswordEntries: suggestions.savedPasswordEntries,
             emailSuggestions: suggestions.emailSuggestions,
             generatedPassword: suggestions.generatedPassword,
-            selectedSuggestionIndex: suggestions.selectedSuggestionIndex
+            selectedSuggestionIndex: suggestions.selectedSuggestionIndex,
+            fillContext: tab?.browserPage?.currentPasswordContext()
         )
 
         tab?.passwordTriggerOverlayState = overlayState
@@ -503,7 +532,8 @@ final class PasswordAutofillCoordinator {
             savedPasswordEntries: overlay.savedPasswordEntries,
             emailSuggestions: overlay.emailSuggestions,
             generatedPassword: overlay.generatedPassword,
-            selectedSuggestionIndex: overlay.selectedSuggestionIndex
+            selectedSuggestionIndex: overlay.selectedSuggestionIndex,
+            fillContext: overlay.fillContext
         )
     }
 
@@ -516,7 +546,8 @@ final class PasswordAutofillCoordinator {
             savedPasswordEntries: overlay.savedPasswordEntries,
             emailSuggestions: overlay.emailSuggestions,
             generatedPassword: overlay.generatedPassword,
-            selectedSuggestionIndex: selectionIndex
+            selectedSuggestionIndex: selectionIndex,
+            fillContext: overlay.fillContext
         )
     }
 
@@ -535,11 +566,18 @@ final class PasswordAutofillCoordinator {
         tab?.evaluatePasswordJavaScript(script)
     }
 
+    /// Exact-context re-check at fill time (called again after the async
+    /// auth prompt in `autofill`): the same BrowserPage instance must still
+    /// show the same document — same generation, full origin, URL, and
+    /// isolated-world token — that the overlay was captured against.
+    /// Clearing the overlay alone is not the guard; this equality is.
     private func isFillContextValid(for overlay: PasswordAutofillOverlayState) -> Bool {
-        PasswordBridge.isFillContextValid(
-            currentURL: tab?.browserPage?.currentURL,
-            overlayHostname: overlay.focus.hostname
-        )
+        guard let captured = overlay.fillContext,
+              let current = tab?.browserPage?.currentPasswordContext()
+        else {
+            return false
+        }
+        return captured == current
     }
 
     private func setOverlayKeyboardActive(_ isActive: Bool) {
