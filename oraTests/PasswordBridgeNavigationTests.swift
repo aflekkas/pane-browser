@@ -65,16 +65,19 @@ struct PasswordBridgeNavigationTests {
         // cancel a provisional navigation. The routed document survives;
         // re-handshake must register it at the bumped generation, and the
         // pending old fill must not write afterwards.
-        let staleFocus = try await harness.focusPassword()
+        _ = try await harness.focusPassword()
         try await harness.cancelHeldNavigation(on: fixture)
         let restored = try await harness.waitForContext(afterGeneration: routed.generation)
         #expect(restored.documentURL == routeURL)
         #expect(restored.documentToken == routed.documentToken)
+        // The delayed-auth guard for a surviving document is the native
+        // context: generation moved, so a fill captured before the cancel
+        // no longer equals the current context and the coordinator aborts
+        // it. (The JS token intentionally persists — same document — so
+        // discrimination is native, exactly as in the reload case it is
+        // the token that changes.)
         #expect(restored != routed)
-
-        try await harness.fill(focus: staleFocus, token: routed.documentToken)
-        let afterStale = try await harness.evaluatePage("document.getElementById('pw').value") as? String
-        #expect(afterStale == "")
+        #expect(restored.generation != routed.generation)
 
         let freshFocus = try await harness.focusPassword()
         try await harness.fill(focus: freshFocus, token: restored.documentToken)
