@@ -164,8 +164,30 @@ final class PasswordAutofillCoordinator {
 
     private var dismissWorkItem: DispatchWorkItem?
 
-    init(tab: Tab) {
+    /// Injectable auth seam for `autofill` only, so tests can control the
+    /// async authentication delay (and simulate navigation mid-auth)
+    /// without OS auth or the Keychain. Defaults delegate to the shared
+    /// password service; every other service call is unchanged.
+    private let authenticate: @Sendable (String) async -> Bool
+    private let revealPassword: @Sendable (SavedPasswordSummary) throws -> String
+    private let markUsed: @Sendable (SavedPasswordSummary) -> Void
+
+    init(
+        tab: Tab,
+        authenticate: @escaping @Sendable (String) async -> Bool = { reason in
+            await PasswordManagerService.shared.authenticate(reason: reason)
+        },
+        revealPassword: @escaping @Sendable (SavedPasswordSummary) throws -> String = { entry in
+            try PasswordManagerService.shared.revealPassword(for: entry)
+        },
+        markUsed: @escaping @Sendable (SavedPasswordSummary) -> Void = { entry in
+            PasswordManagerService.shared.markUsed(entry)
+        }
+    ) {
         self.tab = tab
+        self.authenticate = authenticate
+        self.revealPassword = revealPassword
+        self.markUsed = markUsed
     }
 
     func handleMessage(_ messageBody: String, pageURL: URL?) {
@@ -234,15 +256,19 @@ final class PasswordAutofillCoordinator {
         setOverlayKeyboardActive(true)
     }
 
-    func autofill(_ entry: SavedPasswordSummary, for overlay: PasswordAutofillOverlayState) {
+    @discardableResult
+    func autofill(
+        _ entry: SavedPasswordSummary,
+        for overlay: PasswordAutofillOverlayState
+    ) -> Task<Void, Never> {
         Task { [weak self] in
             guard let self else { return }
 
-            let authenticated = await self.passwordManager.authenticate(
-                reason: "Autofill the saved password for \(entry.displayUsername) on \(entry.host)"
+            let authenticated = await authenticate(
+                "Autofill the saved password for \(entry.displayUsername) on \(entry.host)"
             )
             guard authenticated,
-                  let password = try? self.passwordManager.revealPassword(for: entry)
+                  let password = try? revealPassword(entry)
             else {
                 return
             }
@@ -266,7 +292,7 @@ final class PasswordAutofillCoordinator {
                 )
 
                 self.evaluate(scriptMethod: "fillCredentials", payload: request)
-                self.passwordManager.markUsed(entry)
+                self.markUsed(entry)
                 self.dismissOverlay()
             }
         }

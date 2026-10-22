@@ -15,20 +15,14 @@ final class BrowserPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
     private var isReadyForNavigation = false
     private var pendingLoadRequest: URLRequest?
     private var pendingReload = false
-    /// Monotonic document generation for the password bridge. Bumped on
-    /// every provisional navigation and teardown so a captured fill/message
-    /// context from a previous document can never match again — including
-    /// a same-URL reload.
-    private(set) var passwordNavigationGeneration = 0
-    private var passwordDocumentToken: String?
-    /// Native same-document URL tracking. `lastCommittedURL` only moves on
-    /// commit/finish, so SPA `history.pushState`/`replaceState` routes would
-    /// otherwise diverge from the frame URL WebKit reports and legitimate
-    /// logins would be rejected as stale. Updated from commit/finish and
-    /// from KVO on `webView.url` for same-origin route changes only; the
-    /// generation/token binding is untouched by route changes.
-    private var currentDocumentURL: URL?
+    /// Password-bridge per-document state (generation, token, tracked
+    /// document URL). See `PasswordDocumentTracker`.
+    let passwordTracker = PasswordDocumentTracker()
     private var urlObservation: NSKeyValueObservation?
+
+    var passwordNavigationGeneration: Int {
+        passwordTracker.generation
+    }
 
     init(
         profile: BrowserEngineProfile,
@@ -89,15 +83,7 @@ final class BrowserPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
         }
 
         urlObservation = webView.observe(\.url, options: [.new]) { [weak self] webView, _ in
-            guard let self,
-                  let newURL = webView.url,
-                  let current = currentDocumentURL,
-                  let newKey = PasswordBridge.originKey(for: newURL),
-                  newKey == PasswordBridge.originKey(for: current)
-            else {
-                return
-            }
-            currentDocumentURL = newURL
+            self?.passwordTracker.noteRouteChange(to: webView.url)
         }
 
         webView.navigationDelegate = self
@@ -223,25 +209,10 @@ final class BrowserPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
     /// has registered (fail closed). Equality covers page instance,
     /// generation, full origin, document URL, and document token.
     func currentPasswordContext() -> PasswordDocumentContext? {
-        guard let documentURL = currentDocumentURL ?? webView.url ?? lastCommittedURL,
-              let originKey = PasswordBridge.originKey(for: documentURL),
-              let passwordDocumentToken,
-              !passwordDocumentToken.isEmpty
-        else {
-            return nil
-        }
-        return PasswordDocumentContext(
+        passwordTracker.context(
             pageIdentity: ObjectIdentifier(self),
-            generation: passwordNavigationGeneration,
-            originKey: originKey,
-            documentURL: documentURL,
-            documentToken: passwordDocumentToken
+            fallbackURL: webView.url ?? lastCommittedURL
         )
-    }
-
-    private func invalidatePasswordDocument() {
-        passwordNavigationGeneration += 1
-        passwordDocumentToken = nil
     }
 
     /// Re-handshake after a failed/cancelled provisional navigation: the
@@ -252,10 +223,7 @@ final class BrowserPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
     /// before the navigation stay invalid). No-op when no committed
     /// document survives.
     private func rehandshakeSurvivingPasswordDocument() {
-        guard let committed = lastCommittedURL,
-              let current = webView.url,
-              PasswordBridge.isSameDocument(committed, current)
-        else {
+        guard passwordTracker.canRehandshake(committedURL: lastCommittedURL, currentURL: webView.url) else {
             return
         }
         evaluatePasswordJavaScript(
@@ -264,7 +232,7 @@ final class BrowserPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
     }
 
     func teardown() {
-        invalidatePasswordDocument()
+        passwordTracker.invalidate()
         urlObservation?.invalidate()
         urlObservation = nil
         webView.stopLoading()
@@ -335,34 +303,16 @@ final class BrowserPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
         let frameURL = message.frameInfo.request.url
         if isolatedMessageNames.contains(message.name) {
-            // Document registration: the isolated script announces its
-            // per-document token once at install. Accept it only from the
-            // main frame of the document WebKit currently displays; never
-            // forward it to the delegate.
-            if PasswordBridge.isBridgeReadyMessage(message.body) {
-                if message.frameInfo.isMainFrame,
-                   let frameURL,
-                   let currentURL = webView.url,
-                   PasswordBridge.isSameDocument(frameURL, currentURL),
-                   let token = PasswordBridge.payloadToken(from: message.body),
-                   !token.isEmpty
-                {
-                    passwordDocumentToken = token
-                }
-                return
-            }
-            // Privileged bridge: validate against WebKit's own frame facts
-            // and the registered document context, never the JS payload's
-            // claims. Drops subframe, cross-origin, forged-token, and
-            // stale/queued (pre-navigation or pre-reload) messages before
-            // any delegate sees them.
-            guard PasswordBridge.isValidMessage(
+            // Privileged bridge: the tracker registers bridgeReady tokens
+            // and validates against WebKit's own frame facts plus the
+            // registered document context, never the payload's claims.
+            guard passwordTracker.shouldForwardMessage(
                 isMainFrame: message.frameInfo.isMainFrame,
                 frameURL: frameURL,
                 pageURL: webView.url,
-                committedURL: currentDocumentURL ?? lastCommittedURL,
-                payloadToken: PasswordBridge.payloadToken(from: message.body),
-                current: currentPasswordContext()
+                committedURL: lastCommittedURL,
+                body: message.body,
+                pageIdentity: ObjectIdentifier(self)
             ) else {
                 return
             }
@@ -406,7 +356,7 @@ final class BrowserPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
         // Any new navigation — including same-URL reload — retires the
         // previous document for password purposes immediately, while the
         // navigation is still in progress.
-        invalidatePasswordDocument()
+        passwordTracker.invalidate()
         if !isDownloadNavigation {
             originalURL = lastCommittedURL
             emitNavigationEvent(
@@ -422,7 +372,7 @@ final class BrowserPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
         if !isDownloadNavigation {
             lastCommittedURL = webView.url
-            currentDocumentURL = webView.url
+            passwordTracker.commitDocument(url: webView.url)
             emitNavigationEvent(
                 phase: .committed,
                 url: webView.url,
@@ -436,7 +386,7 @@ final class BrowserPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         if !isDownloadNavigation {
             lastCommittedURL = webView.url
-            currentDocumentURL = webView.url
+            passwordTracker.commitDocument(url: webView.url)
             emitNavigationEvent(
                 phase: .finished,
                 url: webView.url,

@@ -114,6 +114,120 @@ enum PasswordBridge {
     }
 }
 
+/// Native per-document state for the password bridge, owned by a
+/// `BrowserPage`. Holds the navigation generation, the isolated world's
+/// per-document token, and the tracked current document URL (including
+/// SPA same-document route changes). Any navigation — including a
+/// same-URL reload — retires the previous document immediately.
+final class PasswordDocumentTracker {
+    private(set) var generation = 0
+    private var documentToken: String?
+    private(set) var currentDocumentURL: URL?
+
+    func invalidate() {
+        generation += 1
+        documentToken = nil
+    }
+
+    func registerToken(_ token: String) {
+        guard !token.isEmpty else { return }
+        documentToken = token
+    }
+
+    func commitDocument(url: URL?) {
+        currentDocumentURL = url
+    }
+
+    /// SPA `pushState`/`replaceState`: the document (and its generation /
+    /// token) survives, only the route changes. Track same-origin route
+    /// changes natively so legitimate logins are not rejected as stale.
+    func noteRouteChange(to newURL: URL?) {
+        guard let newURL,
+              let current = currentDocumentURL,
+              let newKey = PasswordBridge.originKey(for: newURL),
+              newKey == PasswordBridge.originKey(for: current)
+        else {
+            return
+        }
+        currentDocumentURL = newURL
+    }
+
+    func context(pageIdentity: ObjectIdentifier, fallbackURL: URL?) -> PasswordDocumentContext? {
+        guard let documentURL = currentDocumentURL ?? fallbackURL,
+              let originKey = PasswordBridge.originKey(for: documentURL),
+              let documentToken,
+              !documentToken.isEmpty
+        else {
+            return nil
+        }
+        return PasswordDocumentContext(
+            pageIdentity: pageIdentity,
+            generation: generation,
+            originKey: originKey,
+            documentURL: documentURL,
+            documentToken: documentToken
+        )
+    }
+
+    /// Full native handling for one isolated-world message. Returns true
+    /// only when the message may be forwarded to the page delegate.
+    /// `bridgeReady` announcements register this document's token (main
+    /// frame of the currently displayed document only) and are consumed.
+    func shouldForwardMessage(
+        isMainFrame: Bool,
+        frameURL: URL?,
+        pageURL: URL?,
+        committedURL: URL?,
+        body: Any?,
+        pageIdentity: ObjectIdentifier
+    ) -> Bool {
+        if PasswordBridge.isBridgeReadyMessage(body) {
+            if isMainFrame,
+               let frameURL,
+               let pageURL,
+               PasswordBridge.isSameDocument(frameURL, pageURL),
+               let token = PasswordBridge.payloadToken(from: body)
+            {
+                registerToken(token)
+            }
+            return false
+        }
+        return isValidMessage(
+            isMainFrame: isMainFrame,
+            frameURL: frameURL,
+            pageURL: pageURL,
+            committedURL: committedURL,
+            payloadToken: PasswordBridge.payloadToken(from: body),
+            pageIdentity: pageIdentity
+        )
+    }
+
+    /// Whether a surviving committed document may re-announce its token
+    /// after a failed/cancelled provisional navigation.
+    func canRehandshake(committedURL: URL?, currentURL: URL?) -> Bool {
+        guard let committedURL, let currentURL else { return false }
+        return PasswordBridge.isSameDocument(committedURL, currentURL)
+    }
+
+    func isValidMessage(
+        isMainFrame: Bool,
+        frameURL: URL?,
+        pageURL: URL?,
+        committedURL: URL?,
+        payloadToken: String?,
+        pageIdentity: ObjectIdentifier
+    ) -> Bool {
+        PasswordBridge.isValidMessage(
+            isMainFrame: isMainFrame,
+            frameURL: frameURL,
+            pageURL: pageURL,
+            committedURL: currentDocumentURL ?? committedURL,
+            payloadToken: payloadToken,
+            current: context(pageIdentity: pageIdentity, fallbackURL: pageURL)
+        )
+    }
+}
+
 /// Everything a fill/message decision is bound to. Captured natively at
 /// overlay creation and re-derived at fill time; any navigation (including
 /// a same-URL reload), page replacement, scheme downgrade, or port change
