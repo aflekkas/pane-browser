@@ -122,8 +122,9 @@ final class LifecycleRepairFixture {
 final class LifecycleRepairHarness {
     private let window: NSWindow
     private(set) var page: BrowserPage
+    private var viewportTrace: [[String: Any]] = []
 
-    init(page: BrowserPage? = nil, profile: BrowserEngineProfile? = nil) {
+    init(page: BrowserPage? = nil, profile: BrowserEngineProfile? = nil, isVisible: Bool = true) {
         self.page = page ?? BrowserEngine().makePage(
             profile: profile ?? BrowserEngineProfile(identifier: UUID(), isPrivate: true),
             configuration: .oraDefault(userScripts: [], privacySettings: SpacePrivacySettings()),
@@ -135,7 +136,9 @@ final class LifecycleRepairHarness {
         )
         window.isReleasedWhenClosed = false
         attach(self.page)
-        window.orderBack(nil)
+        if isVisible {
+            window.orderBack(nil)
+        }
     }
 
     func attach(_ page: BrowserPage) {
@@ -143,6 +146,10 @@ final class LifecycleRepairHarness {
         self.page = page
         page.contentView.frame = NSRect(x: 0, y: 0, width: 900, height: 600)
         window.contentView?.addSubview(page.contentView)
+    }
+
+    func show() {
+        window.makeKeyAndOrderFront(nil)
     }
 
     func close() {
@@ -190,11 +197,27 @@ final class LifecycleRepairHarness {
 @MainActor
 extension LifecycleRepairHarness {
     func scroll(to offset: Double) async throws {
+        show()
         _ = try await evaluate("window.scrollTo(0,\(offset)); true")
         try await expectScroll(y: offset)
-        // Let the isolated-world scroll event reach the native checkpoint.
-        _ = try await page.webView.takeSnapshot(configuration: nil)
-        await Task.yield()
+        // Snapshot completion/yield is not a scroll-message delivery barrier.
+        // Wait for the production isolated-world handler to record the viewport.
+        for _ in 0 ..< 40 {
+            if let data = page.captureInteractionState(), Self.checkpointScrollY(data) == offset {
+                return
+            }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        Issue.record("Native checkpoint did not record actual WebKit scrollY \(offset)")
+    }
+
+    static func checkpointScrollY(_ data: Data) -> Double? {
+        let prefix = Data("PaneCheckpoint1\0".utf8)
+        guard data.starts(with: prefix),
+              let payload = try? PropertyListSerialization.propertyList(
+                  from: data.dropFirst(prefix.count), format: nil
+              ) as? [String: Any] else { return nil }
+        return payload["scrollY"] as? Double
     }
 
     func expectScroll(y offset: Double) async throws {
@@ -227,5 +250,33 @@ extension TabManager {
         modelContext.undoManager?.removeAllActions()
         modelContext.undoManager = nil
         try? modelContext.save()
+    }
+}
+
+@MainActor
+extension LifecycleRepairHarness {
+    /// Bounded, opt-in localhost diagnostics for the complete Tab/disk restore
+    /// route. Production never installs this observer or logs browsing data.
+    func traceViewport() {
+        page.lifecycleViewportDiagnosticHandler = { [weak self] event in
+            guard let self else { return }
+            var event = event
+            event["nativeTime"] = ProcessInfo.processInfo.systemUptime
+            event["nativeURL"] = self.page.currentURL?.absoluteString ?? ""
+            event["generation"] = self.page.passwordNavigationGeneration
+            event["pending"] = self.page.hasPendingLifecycleRestore
+            event["viewWidth"] = self.page.contentView.bounds.width
+            event["viewHeight"] = self.page.contentView.bounds.height
+            self.viewportTrace.append(event)
+            if self.viewportTrace.count > 64 {
+                self.viewportTrace.removeFirst()
+            }
+        }
+    }
+
+    func dumpViewportTrace() {
+        guard let data = try? JSONSerialization.data(withJSONObject: viewportTrace, options: [.sortedKeys]),
+              let text = String(data: data, encoding: .utf8) else { return }
+        FileHandle.standardError.write(Data("Lifecycle viewport trace: \(text)\n".utf8))
     }
 }

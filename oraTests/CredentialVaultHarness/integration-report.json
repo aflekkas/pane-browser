@@ -1,0 +1,131 @@
+{
+  "baseCommit": "af25b432cc366e556c9df5b6a44f737d01a716fa",
+  "frozenManifestSHA256": "2d71e08347748bb234bcc67eeebfc81f967e414757e9622922eb56db3d762fe3",
+  "sharedPatchSHA256": "9be766544dd4eda9032f32564b05d92e2e029653d8e5db055956adf215d347d5",
+  "deltas": [
+    {
+      "path": "ora/Features/Passwords/Services/CredentialImportZIP.swift",
+      "frozenSHA256": "8c450ea83952f21ee8866860f3fb3d047fbf94997f0a8572e520ae6ae3fa9128",
+      "integratedSHA256": "d6df8c5746057c18791a3fdfa60ce60c68d29d5a3cef8b37ea0588ae2bd65d4f",
+      "reason": "SwiftFormat blank lines only"
+    },
+    {
+      "path": "ora/Features/Passwords/Services/CredentialVault.swift",
+      "frozenSHA256": "0df3ae81003e566564add70e0dd546622e8c83af715a80848d76eb019ea07a70",
+      "integratedSHA256": "2b5f5417d3919298676d038b797015462604ba5b1c54fff7d38e1b38225e1178",
+      "reason": "SwiftFormat blank lines only"
+    },
+    {
+      "path": "ora/Features/Passwords/Services/CredentialVaultAuthentication.swift",
+      "frozenSHA256": "780169a401d7740b6d53fe68d92a683bfffcdf3cd51f24c5d26995b763a5abce",
+      "integratedSHA256": "278bcc8025481c5ee3dd61617fe459358413b190bc460a4cdee08eb0cb28df23",
+      "reason": "Generation-aware authentication replacement revocation"
+    },
+    {
+      "path": "ora/Features/Passwords/Services/CredentialVaultBackend.swift",
+      "frozenSHA256": "e1393927b5e91bf8bdc89f3ab247280a96815a51fb6a6218a587d7a9ebdc5a8d",
+      "integratedSHA256": "7e0465fc8a277eecd1f4da5640d72b979f2e991a2c1c88e89ad0a03b69d9ec04",
+      "reason": "SwiftFormat blank lines only"
+    },
+    {
+      "path": "ora/Features/Passwords/Services/PasswordManagerService.swift",
+      "frozenSHA256": "3e2ed540b497dd56645ff1cf14f5bfd73d7d86dc08ba1812569d978db09eb80f",
+      "integratedSHA256": "4383917c4e2ca9c99b3e9482a3e04497486a5f5be0cc59737d4bded4163e8aae",
+      "reason": "Generation-aware authentication replacement revocation"
+    },
+    {
+      "path": "ora/Features/Passwords/Services/PasswordVaultModels.swift",
+      "frozenSHA256": "7434dcb870431e00395b8203c7d3ff9fbae77e8b4949d3a711bf5594f052024c",
+      "integratedSHA256": "cef3e8203f19707e845ad719c57176ff6bf7e893aff71b06d29d3800fb82cbc9",
+      "reason": "Generation-aware authentication replacement revocation"
+    },
+    {
+      "path": "ora/Features/Passwords/Views/PasswordsWindow.swift",
+      "frozenSHA256": "5e9f2ce89a835823ccf52e014c44155944a41d9c8ed87356a5979c7932214d19",
+      "integratedSHA256": "18973af5a5c456d67ef8dd7ef357848fdda8a81103bcbc3920524e47dfa7203d",
+      "reason": "Generation-aware authentication replacement revocation"
+    },
+    {
+      "path": "ora/Features/Passwords/Views/PasswordsWindowTable.swift",
+      "frozenSHA256": "fc8363a7a85ceb9b7311540f6c6a20506f64aff321d310c093e3b5b800e73efe",
+      "integratedSHA256": "a0d39d086b38e68c51d59017995a8471516cb062c767dd26ce132f1ca8682459",
+      "reason": "Generation-aware authentication replacement revocation"
+    },
+    {
+      "path": "oraTests/CredentialVaultMigrationTests.swift",
+      "frozenSHA256": "54a1cbe2249b7ae68e005e94f539e4e96a4567cdff05a0586b2194729e1c0c0f",
+      "integratedSHA256": "d1444ff33efb506faa02251611442f0141a7c47a686a7d0f292d1b1104104f05",
+      "reason": "SwiftFormat blank lines only"
+    },
+    {
+      "path": "oraTests/CredentialVaultOSIdentityTests.swift",
+      "frozenSHA256": "737b85c14e4881828c0a6b2b25456275e8071708d77b42e5b953747bedeb02aa",
+      "integratedSHA256": "ebfebac8b5eca5b1a7642154724dc489c99a39e5c1d20d73cd233aba9db0316b",
+      "reason": "SwiftFormat blank lines only"
+    },
+    {
+      "path": "oraTests/CredentialVaultTestSupport.swift",
+      "frozenSHA256": "c9d86468ea7e978e80c6f35ec1d71d9aa43f438d2af554da09aaa3560457fc77",
+      "integratedSHA256": "5b8544c3e32a540f84ed469306741b8a2f6043780ea79418e67fdcd63dafef63",
+      "reason": "SwiftFormat blank lines only"
+    },
+    {
+      "path": "oraTests/CredentialVaultHarness/typecheck_ui.py",
+      "frozenSHA256": "0d2a463de4c911a518393304ca118e5219b7c601c7ee3b0f3e573e084ae0e0a8",
+      "integratedSHA256": "ee28bbd580616f283e4a9f99479b2172be5f0d6a35296832105378422cd5b186",
+      "reason": "Check integrated Settings without outside patch"
+    },
+    {
+      "path": "ora/Features/Settings/Sections/PasswordsSettingsView.swift",
+      "integratedSHA256": "56db8ea8d2963c3b3b155f7dfce3fe8863b941c2902cc7458c2db2f47f85d0cf",
+      "reason": "Required shared integration; project reconciled for actual Debug entitlement and plist settings"
+    },
+    {
+      "path": "ora/Features/Importer/Views/ImportDataButton.swift",
+      "integratedSHA256": "9dc31939daffb74a878ad7d52135960eb3ec6c6f49fdffb0ce816cc27cbb91bc",
+      "reason": "Required shared integration; project reconciled for actual Debug entitlement and plist settings"
+    },
+    {
+      "path": "ora/Info/ora.entitlements",
+      "integratedSHA256": "14f60934228916dbe5df775d17831603969eb51b5fac7238ea1a1203e5867008",
+      "reason": "Required shared integration; project reconciled for actual Debug entitlement and plist settings"
+    },
+    {
+      "path": "project.yml",
+      "integratedSHA256": "496049b50936ea9e35e4e6355d98369d6866c38c09c7529a14e662a23666742b",
+      "reason": "Required shared integration; project reconciled for actual Debug entitlement and plist settings"
+    },
+    {
+      "path": "oraTests/CredentialVaultReplacementTests.swift",
+      "integratedSHA256": "9fd30c0cda7ab4421ccdd724e2c6f9e66fc1e67471bcfd2946ebe44fd745cc1c",
+      "reason": "Service publisher and shared presentation regression tests"
+    }
+  ],
+  "validation": {
+    "harness": "36 tests in 8 suites pass; injected stores plus isolated disposable file keychain",
+    "ui": "Actual SDK full bodies; app dependencies and Query macro stubbed",
+    "fullXcode": "pending CI",
+    "signedDataProtection": "manual gate; not executed"
+  },
+  "followupFixes": [
+    {
+      "parentCommit": "ac20aa77182f9b41ef192ab71b149c52b9221d11",
+      "reason": "Qualify Swift.Result type and constructor to avoid the existing importer module-level Result; model that collision in both dependency fixtures",
+      "validation": "Collision reproduced before fix; 36 harness tests in 8 suites and full-body SDK UI typecheck pass after fix; CI ac20aa7 stopped during compilation before runtime tests",
+      "files": [
+        {
+          "path": "ora/Features/Passwords/Services/CredentialVault.swift",
+          "sha256": "34fd980a15b8e58c68d6e070b457dd0e55c4c3a817760324d722ebe71bbf8e2b"
+        },
+        {
+          "path": "oraTests/CredentialVaultHarness/BridgeSupport.swift.fixture",
+          "sha256": "d118d26d7939ff7284555b981236edd81bbbad10c3a674fadf4a67404c277aa1"
+        },
+        {
+          "path": "oraTests/CredentialVaultHarness/UISupport.swift.fixture",
+          "sha256": "7875f21ef4469b5aed37a76d5274d67d5617a10011c86bf79fb0b143ee3c8147"
+        }
+      ]
+    }
+  ]
+}

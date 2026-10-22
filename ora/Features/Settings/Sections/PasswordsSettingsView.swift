@@ -8,11 +8,9 @@ struct PasswordsSettingsView: View {
     @StateObject private var passwordManager = PasswordManagerService.shared
     private let providers = PasswordManagerProviderRegistry.shared
 
+    @State private var vaultPresentation = PasswordVaultPresentation()
     @State private var searchText = ""
-    @State private var isUnlocked = false
-    @State private var isAuthenticating = false
     @State private var selectedContainerId: UUID?
-    @State private var revealedPasswordIDs: [String: String] = [:]
     @State private var pendingDelete: SavedPasswordSummary?
 
     private var selectedProvider: PasswordManagerProviderDescriptor {
@@ -61,6 +59,9 @@ struct PasswordsSettingsView: View {
         }
         .onDisappear {
             lockVault()
+        }
+        .onReceive(passwordManager.$authenticationRevision.dropFirst()) { revision in
+            clearVaultState(replacement: revision)
         }
         .alert("Delete saved password?", isPresented: Binding(
             get: { pendingDelete != nil },
@@ -119,6 +120,12 @@ struct PasswordsSettingsView: View {
             Toggle("Prompt to save passwords", isOn: $settings.passwordSavePromptsEnabled)
                 .disabled(!settings.passwordsEnabled || !selectedProvider.usesBuiltInVault)
 
+            if selectedProvider.usesBuiltInVault {
+                Text(passwordManager.vaultProtection.userFacingDescription)
+                    .font(.caption)
+                    .foregroundStyle(passwordManager.vaultProtection == .userPresence ? Color.secondary : Color.orange)
+            }
+
             if !selectedProvider.isAvailable {
                 Text("\(selectedProvider.title) is not yet integrated.")
                     .font(.caption)
@@ -134,7 +141,7 @@ struct PasswordsSettingsView: View {
                     VStack(alignment: .leading, spacing: 4) {
                         Text(selectedProvider.usesBuiltInVault ? "Saved Credentials" : selectedProvider.title)
                             .font(.headline)
-                        if selectedProvider.usesBuiltInVault, isUnlocked {
+                        if selectedProvider.usesBuiltInVault, vaultPresentation.isUnlocked {
                             Text("\(visibleEntries.count) item\(visibleEntries.count == 1 ? "" : "s")")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
@@ -143,7 +150,7 @@ struct PasswordsSettingsView: View {
 
                     Spacer()
 
-                    if selectedProvider.usesBuiltInVault, isUnlocked {
+                    if selectedProvider.usesBuiltInVault, vaultPresentation.isUnlocked {
                         Button("Lock") {
                             lockVault()
                         }
@@ -154,7 +161,7 @@ struct PasswordsSettingsView: View {
                     emptyState(message: "\(selectedProvider.title) integration coming soon.")
                 } else if containers.isEmpty {
                     emptyState(message: "Create a space to start storing passwords.")
-                } else if isUnlocked {
+                } else if vaultPresentation.isUnlocked {
                     spacePickerRow
 
                     TextField("Search saved passwords", text: $searchText)
@@ -222,9 +229,9 @@ struct PasswordsSettingsView: View {
             }
 
             OraButton(
-                label: isAuthenticating ? "Unlocking..." : "Unlock Passwords",
+                label: vaultPresentation.isAuthenticating ? "Unlocking..." : "Unlock Passwords",
                 variant: .outline,
-                isDisabled: isAuthenticating,
+                isDisabled: vaultPresentation.isAuthenticating,
                 leadingIcon: passwordManager.canUseBiometricAuthentication() ? "touchid" : "lock.open"
             ) {
                 unlockVault()
@@ -305,6 +312,10 @@ struct PasswordsSettingsView: View {
                     Text(entry.host)
                         .font(.subheadline.weight(.medium))
                         .lineLimit(1)
+                    Text(passwordManager.storedProtectionDescription(for: entry))
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
                     if let origin = entry.origin {
                         Text(origin)
                             .font(.caption2)
@@ -328,19 +339,19 @@ struct PasswordsSettingsView: View {
             .frame(width: 220, alignment: .leading)
 
             HStack(spacing: 6) {
-                Text(revealedPasswordIDs[entry.id] ?? "••••••••••••")
+                Text(vaultPresentation.revealedPasswordIDs[entry.id] ?? "••••••••••••")
                     .font(.system(.subheadline, design: .monospaced))
                     .lineLimit(1)
 
                 Button {
                     toggleReveal(entry)
                 } label: {
-                    Image(systemName: revealedPasswordIDs[entry.id] == nil ? "eye" : "eye.slash")
+                    Image(systemName: vaultPresentation.revealedPasswordIDs[entry.id] == nil ? "eye" : "eye.slash")
                         .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(Color.secondary)
                 }
                 .buttonStyle(.plain)
-                .help(revealedPasswordIDs[entry.id] == nil ? "Reveal password" : "Hide password")
+                .help(vaultPresentation.revealedPasswordIDs[entry.id] == nil ? "Reveal password" : "Hide password")
 
                 copyActionButton(help: "Copy password") {
                     copyPassword(entry)
@@ -398,13 +409,16 @@ struct PasswordsSettingsView: View {
     }
 
     private func unlockVault() {
-        isAuthenticating = true
+        let attempt = vaultPresentation.beginUnlock()
         Task {
-            let authenticated = await passwordManager.authenticate(reason: "Unlock your saved passwords in Pane")
+            guard vaultPresentation.unlockAttempt == attempt else { return }
+            let authenticated = await passwordManager.authenticate(
+                reason: "Unlock your saved passwords in Pane", attemptID: attempt
+            )
             await MainActor.run {
-                isUnlocked = authenticated
-                isAuthenticating = false
-                if authenticated {
+                if vaultPresentation.finishUnlock(
+                    attempt: attempt, authenticated: authenticated && passwordManager.isAuthenticated
+                ) {
                     passwordManager.refresh()
                 }
             }
@@ -412,20 +426,23 @@ struct PasswordsSettingsView: View {
     }
 
     private func lockVault() {
-        isUnlocked = false
-        isAuthenticating = false
+        clearVaultState()
+        passwordManager.invalidateAuthenticatedContext()
+    }
+
+    private func clearVaultState(replacement: UUID? = nil) {
+        vaultPresentation.revoke(replacement: replacement)
         searchText = ""
-        revealedPasswordIDs.removeAll()
     }
 
     private func toggleReveal(_ entry: SavedPasswordSummary) {
-        if revealedPasswordIDs[entry.id] != nil {
-            revealedPasswordIDs[entry.id] = nil
+        if vaultPresentation.revealedPasswordIDs[entry.id] != nil {
+            vaultPresentation.revealedPasswordIDs[entry.id] = nil
             return
         }
 
         if let password = try? passwordManager.revealPassword(for: entry) {
-            revealedPasswordIDs[entry.id] = password
+            vaultPresentation.revealedPasswordIDs[entry.id] = password
         }
     }
 

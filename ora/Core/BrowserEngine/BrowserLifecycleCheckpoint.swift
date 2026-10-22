@@ -18,6 +18,13 @@ final class BrowserLifecycleCheckpoint: NSObject, WKScriptMessageHandler {
     private weak var webView: WKWebView?
     private var position: (url: String, scrollX: Double, scrollY: Double)?
     private var restoring: Payload?
+    private var restoreID: UUID?
+    private var captureBlocked = false
+    /// Opt-in diagnostics for hosted flow tests; never logs browsing data by default.
+    var onDiagnostic: (([String: Any]) -> Void)?
+    var hasPendingRestore: Bool {
+        restoring != nil
+    }
 
     func install(on webView: WKWebView) {
         self.webView = webView
@@ -41,11 +48,35 @@ final class BrowserLifecycleCheckpoint: NSObject, WKScriptMessageHandler {
               url == webView.url?.absoluteString,
               let scrollX = body["scrollX"] as? Double, let scrollY = body["scrollY"] as? Double,
               scrollX.isFinite, scrollY.isFinite else { return }
+        onDiagnostic?(body)
+        if let acknowledgement = body["restoreID"] as? String {
+            guard let payload = restoring, acknowledgement == restoreID?.uuidString else { return }
+            if body["phase"] as? String == "abandoned" {
+                restoring = nil
+                restoreID = nil
+                captureBlocked = true // URL-only fallback retains the last durable checkpoint.
+                return
+            }
+            guard BrowserLifecycleViewportRestore
+                .accepts(body, requestedX: payload.scrollX, requestedY: payload.scrollY)
+            else {
+                return
+            }
+            restoring = nil
+            restoreID = nil
+            var accepted = body
+            accepted["phase"] = "native-accepted"
+            onDiagnostic?(accepted)
+        } else if restoring != nil {
+            // Ignore the restored document's initial zero-position reports.
+            return
+        }
         position = (url, scrollX, scrollY)
     }
 
     func capture(_ state: Data, url: URL?) -> Data? {
-        guard let state = TabInteractionStateCodec.validated(state) else { return nil }
+        guard !hasPendingRestore, !captureBlocked,
+              let state = TabInteractionStateCodec.validated(state) else { return nil }
         guard let position, position.url == url?.absoluteString else { return state }
         let payload = Payload(
             interactionState: state,
@@ -58,36 +89,57 @@ final class BrowserLifecycleCheckpoint: NSObject, WKScriptMessageHandler {
     }
 
     func prepareRestore(_ data: Data) -> Data? {
-        restoring = nil
+        supersede()
         guard data.starts(with: Self.prefix) else { return TabInteractionStateCodec.validated(data) }
         guard let payload = try? PropertyListDecoder().decode(Payload.self, from: data.dropFirst(Self.prefix.count)),
               payload.scrollX.isFinite, payload.scrollY.isFinite,
               TabInteractionStateCodec.isValid(payload.interactionState) else { return nil }
         restoring = payload
+        restoreID = UUID()
+        onDiagnostic?([
+            "phase": "prepared",
+            "requestedX": payload.scrollX,
+            "requestedY": payload.scrollY,
+            "url": payload.url,
+            "restoreID": restoreID?.uuidString ?? ""
+        ])
         return payload.interactionState
     }
 
     func didCommit() {
+        onDiagnostic?(["phase": "native-commit", "url": webView?.url?.absoluteString ?? ""])
         position = nil
     }
 
     func didFinish() {
-        guard let payload = restoring, let webView else { return }
-        restoring = nil
-        guard webView.url?.absoluteString == payload.url,
-              let encodedURL = try? JSONEncoder().encode(payload.url),
+        guard let payload = restoring, let restoreID, let webView else { return }
+        guard webView.url?.absoluteString == payload.url else { supersede()
+            return
+        }
+        guard let encodedURL = try? JSONEncoder().encode(payload.url),
               let literal = String(data: encodedURL, encoding: .utf8) else { return }
-        // The URL guard also runs inside the evaluated document. A replacement
-        // navigation cannot receive the old document's scroll position.
-        webView.evaluateJavaScript("""
-        requestAnimationFrame(() => {
-          if (location.href === \(literal)) scrollTo(\(payload.scrollX), \(payload.scrollY));
-        }); true;
-        """, in: nil, in: Self.world, completionHandler: nil)
+        onDiagnostic?(["phase": "native-finish", "url": payload.url, "restoreID": restoreID.uuidString])
+        webView.evaluateJavaScript(
+            BrowserLifecycleViewportRestore.script(
+                id: restoreID, urlLiteral: literal, scrollX: payload.scrollX, scrollY: payload.scrollY
+            ), in: nil, in: Self.world, completionHandler: nil
+        )
     }
 
     func supersede() {
+        if let restoreID {
+            onDiagnostic?(["phase": "superseded", "restoreID": restoreID.uuidString])
+            webView?.evaluateJavaScript("""
+            if (globalThis.__paneLifecycleViewportRestore?.id === "\(restoreID.uuidString)") {
+              cancelAnimationFrame(globalThis.__paneLifecycleViewportRestore.frame);
+              globalThis.__paneLifecycleViewportRestore.cancel?.();
+              delete globalThis.__paneLifecycleViewportRestore;
+            } true;
+            """, in: nil, in: Self.world, completionHandler: nil)
+        }
         restoring = nil
+        restoreID = nil
+        captureBlocked = false
         position = nil
     }
 

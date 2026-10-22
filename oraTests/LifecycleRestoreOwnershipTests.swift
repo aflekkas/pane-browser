@@ -2,6 +2,7 @@ import Foundation
 @testable import Ora
 import SwiftData
 import Testing
+import WebKit
 
 @MainActor
 struct LifecycleRestoreOwnershipTests {
@@ -27,6 +28,10 @@ struct LifecycleRestoreOwnershipTests {
         let harness = try LifecycleRepairHarness(page: #require(tab.browserPage))
         defer { harness.close() }
         try await harness.loaded(fixture.url("/b"))
+        // Navigation completion precedes the restored viewport's rendered-frame
+        // acknowledgement. Make rendering possible and await that bounded contract.
+        harness.show()
+        try await LifecycleRepairHarness.waitUntil { !harness.page.hasPendingLifecycleRestore }
         #expect(!harness.page.hasPendingLifecycleRestore)
         #expect(harness.page.canGoBack)
         tab.goBack()
@@ -76,5 +81,44 @@ struct LifecycleRestoreOwnershipTests {
             .interactionState)
         #expect(replacement != original)
         return tab.id
+    }
+}
+
+extension LifecycleRestoreOwnershipTests {
+    @Test(arguments: [false, true])
+    func hiddenViewportRestoreRetiresOnStopOrInPageReplacement(replace: Bool) async throws {
+        let fixture = try await LifecycleRepairFixture()
+        defer { fixture.stop() }
+        let profile = BrowserEngineProfile(identifier: UUID(), isPrivate: true)
+        let source = LifecycleRepairHarness(profile: profile)
+        defer { source.close() }
+        try await source.load(fixture.url())
+        try await source.load(fixture.url("/b"))
+        try await source.scroll(to: 1200)
+        let state = try #require(source.page.captureInteractionState())
+        let destination = LifecycleRepairHarness(profile: profile, isVisible: false)
+        defer { destination.close() }
+        destination.page.restoreInteractionState(state) { _ in }
+        try await destination.loaded(fixture.url("/b"))
+        #expect(destination.page.hasPendingLifecycleRestore)
+        #expect(destination.page.captureInteractionState() == nil)
+        if replace {
+            _ = try await destination.evaluate("document.getElementById('next').href='/c'; "
+                + "document.getElementById('next').click(); true")
+            try await destination.loaded(fixture.url("/c"))
+        } else {
+            destination.page.stopLoading()
+        }
+        #expect(!destination.page.hasPendingLifecycleRestore)
+        #expect(destination.page.captureInteractionState() != nil)
+        destination.show()
+        // A barrier in the real isolated render frame lets any obsolete queued
+        // callback run. It must neither apply old scroll nor reacquire ownership.
+        _ = try await destination.page.webView.callAsyncJavaScript(
+            "await new Promise(resolve => requestAnimationFrame(resolve)); return true;",
+            arguments: [:], in: nil, contentWorld: .page
+        )
+        try await destination.expectScroll(y: 0)
+        #expect(!destination.page.hasPendingLifecycleRestore)
     }
 }

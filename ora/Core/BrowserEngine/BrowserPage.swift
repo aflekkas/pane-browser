@@ -392,7 +392,10 @@ final class BrowserPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
         // previous document for password purposes immediately, while the
         // navigation is still in progress.
         passwordTracker.invalidate()
-        if lifecycleRestoreOwner.didStart(navigation) {
+        let replacedRestore = lifecycleRestoreOwner.didStart(navigation)
+        if replacedRestore || !lifecycleRestoreOwner.isRestoring {
+            // Also retire a viewport restore waiting for a visible render frame
+            // after its native navigation finished. New navigation owns the page.
             lifecycleCheckpoint.supersede()
         }
         onLifecycleNavigation?()
@@ -597,7 +600,8 @@ final class BrowserPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
 extension BrowserPage {
     func stopLoading() {
         cancelAuthentication()
-        if lifecycleRestoreOwner.cancel() {
+        let cancelledNavigation = lifecycleRestoreOwner.cancel()
+        if cancelledNavigation || lifecycleCheckpoint.hasPendingRestore {
             lifecycleCheckpoint.supersede()
             onLifecycleNavigation?()
         }
@@ -645,10 +649,15 @@ extension BrowserPage {
         }
     }
 
-    /// Capture the live interaction state (history/scroll) for lifecycle
-    /// checkpoint/discard. Must run before any teardown.
+    /// Test-only observer; unset in production to avoid logging browsing data.
+    var lifecycleViewportDiagnosticHandler: (([String: Any]) -> Void)? {
+        get { lifecycleCheckpoint.onDiagnostic }
+        set { lifecycleCheckpoint.onDiagnostic = newValue }
+    }
+
     var hasPendingLifecycleRestore: Bool {
         lifecycleRestoration.hasPendingRestore || lifecycleRestoreOwner.isRestoring
+            || lifecycleCheckpoint.hasPendingRestore
     }
 
     var lifecycleFallbackURL: URL? {

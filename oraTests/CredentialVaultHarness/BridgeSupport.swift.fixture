@@ -1,0 +1,36 @@
+// Harness-only app dependencies. Tests execute the repository's actual coordinator;
+// WebKit document generation/token creation is covered by parent app CI, not these stubs.
+import AppKit
+import Foundation
+struct PasswordDocumentContext: Equatable { var documentToken: String }
+final class BrowserPage {
+    var context: PasswordDocumentContext?
+    func currentPasswordContext() -> PasswordDocumentContext? { context }
+}
+final class TabContainer { let id = UUID() }
+final class Tab {
+    var browserPage: BrowserPage? = BrowserPage()
+    var passwordOverlayState: PasswordAutofillOverlayState?
+    var passwordTriggerOverlayState: PasswordAutofillOverlayState?
+    var isPrivate = false
+    var container = TabContainer()
+    var pageWindow: NSWindow?
+    var scripts: [String] = []
+    func evaluatePasswordJavaScript(_ script: String, completion: ((Any?, Error?) -> Void)? = nil) { scripts.append(script) }
+}
+final class SettingsStore {
+    static let shared = SettingsStore()
+    var passwordManagerProvider = PasswordManagerProviderKind.ora
+    var passwordsEnabled = true
+    var passwordAutofillEnabled = true
+    var passwordAutofillSubmitEnabled = true
+    var passwordSavePromptsEnabled = true
+    func allowsPasswordSavePrompts(for host: String) -> Bool { true }
+    func suppressPasswordSavePrompts(for host: String) {}
+}
+final class AppDelegate: NSObject, NSApplicationDelegate { func getWindow() -> NSWindow? { nil } }
+@MainActor func openPasswordsWindow() {}
+
+// Importer.swift declares a module-level, non-generic Result. Preserve its name
+// collision here so isolated checks reject unqualified Swift.Result usage.
+struct Result {}
