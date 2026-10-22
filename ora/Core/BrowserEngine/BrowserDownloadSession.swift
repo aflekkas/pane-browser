@@ -32,15 +32,21 @@ final class BrowserDownloadSession: DownloadTransferSession {
     func configure(_ task: BrowserDownloadTask) {
         task.activity = activity
         activity.begin(task.id)
-        task.onAuthChallenge = { [weak page] challenge in
+        task.onAuthChallenge = { [weak page, weak task] challenge in
             guard let page, let delegate = page.delegate else { return (.cancelAuthenticationChallenge, nil) }
             return await withCheckedContinuation { continuation in
                 let once = OnceCompletion<(URLSession.AuthChallengeDisposition, URLCredential?)> {
                     continuation.resume(returning: $0)
                 }
                 delegate.browserPage(page, respondTo: challenge, scope: page.certificateExceptionScope) {
+                    task?.onCancelAuthentication = nil
                     once.call(($0, $1))
                 }
+                // The tab delegate installs its owner synchronously, before
+                // presenting. Cancelling this transfer dismisses only that
+                // challenge, never a newer navigation's prompt.
+                let operation = page.authenticationSession.activeOperation
+                task?.onCancelAuthentication = { [weak operation] in operation?.cancel() }
             }
         }
     }

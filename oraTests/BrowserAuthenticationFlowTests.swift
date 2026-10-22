@@ -193,3 +193,27 @@ extension BrowserAuthenticationFlowTests {
         #expect(harness.page.lastCommittedURL?.path != "/auth")
     }
 }
+
+extension BrowserAuthenticationFlowTests {
+    @Test func cancellingRetryDismissesItsRealDownloadAuthSheet() async throws {
+        let fixture = try await DownloadFlowFixture()
+        defer { fixture.stop() }
+        let harness = try DownloadFlowHarness()
+        defer { harness.close() }
+        try await harness.load(fixture.url())
+        try await harness.click("attachment")
+        try await harness.wait("initial record") { harness.manager.recentDownloads.first?.status == .completed }
+        let record = try #require(harness.manager.recentDownloads.first)
+        record.originalURL = try fixture.url("/auth-large")
+        record.originalURLString = record.originalURL.absoluteString
+        record.markFailed(error: "Fixture requires download-time authentication")
+        harness.manager.retryDownload(record)
+        try await harness.wait("real download auth sheet") { harness.window.attachedSheet != nil }
+        let sheet = try #require(harness.window.attachedSheet)
+        harness.manager.cancelDownload(record)
+        try await harness.wait("download cancellation dismisses sheet") { sheet.sheetParent == nil }
+        #expect(!sheet.isVisible)
+        #expect(record.status == .cancelled)
+        #expect(!harness.page.hasActiveDownloads)
+    }
+}

@@ -19,6 +19,7 @@ final class BrowserDownloadTask: NSObject, WKDownloadDelegate {
     /// Download-time auth challenges do not route through the navigation
     /// delegate; omitting this rejects the protection space silently.
     var onAuthChallenge: ((URLAuthenticationChallenge) async -> (URLSession.AuthChallengeDisposition, URLCredential?))?
+    var onCancelAuthentication: (() -> Void)?
     private(set) var lastResumeData: Data?
 
     private let download: WKDownload
@@ -46,9 +47,12 @@ final class BrowserDownloadTask: NSObject, WKDownloadDelegate {
         onFinish = nil
         onFail = nil
         onAuthChallenge = nil
+        onCancelAuthentication = nil
     }
 
     func cancel() {
+        onCancelAuthentication?()
+        onCancelAuthentication = nil
         activity?.end(id)
         download.cancel { _ in }
     }
@@ -56,6 +60,8 @@ final class BrowserDownloadTask: NSObject, WKDownloadDelegate {
     /// Cancelling via this variant surfaces resume data so the download can
     /// be resumed later instead of restarted from zero.
     func cancel(completionHandler: @escaping (Data?) -> Void) {
+        onCancelAuthentication?()
+        onCancelAuthentication = nil
         activity?.end(id)
         let once = OnceCompletion(completionHandler)
         download.cancel { [weak self] resumeData in

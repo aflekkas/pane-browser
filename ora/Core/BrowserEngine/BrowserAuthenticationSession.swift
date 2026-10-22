@@ -5,6 +5,9 @@ import AppKit
 @MainActor
 final class BrowserAuthenticationSession {
     private var current: BrowserAuthenticationOperation?
+    var activeOperation: BrowserAuthenticationOperation? {
+        current
+    }
 
     func begin(window: NSWindow?) -> BrowserAuthenticationOperation {
         cancel()
