@@ -159,10 +159,8 @@ class DownloadManager: ObservableObject {
             downloadTask.cancel { [weak self] resumeData in
                 Task { @MainActor in
                     self?.pendingCancellations.remove(download.id)
-                    if let resumeData {
-                        download.resumeData = resumeData
-                        try? self?.modelContext.save()
-                    }
+                    download.resumeData = resumeData
+                    try? self?.modelContext.save()
                 }
             }
             cleanupTask(downloadTask.id)
@@ -333,13 +331,16 @@ class DownloadManager: ObservableObject {
         deleteDownload(download)
     }
 
+    func canRetryDownload(_ download: Download) -> Bool {
+        pendingRetries[download.id] == nil && !pendingCancellations.contains(download.id)
+            && (download.status == .failed || download.status == .cancelled)
+    }
+
     /// A retry is one asynchronous operation in the originating data store.
     /// Legacy records without a proven owner fail closed; they cannot safely
     /// inherit the focused window's profile or private identity.
     func retryDownload(_ download: Download) {
-        guard pendingRetries[download.id] == nil,
-              !pendingCancellations.contains(download.id),
-              download.status == .failed || download.status == .cancelled,
+        guard canRetryDownload(download),
               let scope = download.profileID,
               let session = downloadSessions[scope],
               DownloadSafety.canResume(downloadProfileID: scope, taskProfileID: session.profileScopeID)

@@ -58,7 +58,8 @@ final class BrowserDownloadSession: DownloadTransferSession {
         let received: @MainActor @Sendable (WKDownload) -> Void = { [self] download in
             let task = BrowserDownloadTask(
                 download: download, originalURL: record.originalURL,
-                pageURL: record.pageURLString.flatMap(URL.init(string:)), profileScopeID: profileScopeID
+                pageURL: record.pageURLString.flatMap(URL.init(string:)), profileScopeID: profileScopeID,
+                isResumed: resumeData != nil
             )
             guard pending[record.id] == pendingID else {
                 task.cancel()

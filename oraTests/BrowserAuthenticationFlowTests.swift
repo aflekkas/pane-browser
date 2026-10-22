@@ -72,7 +72,7 @@ struct BrowserAuthenticationFlowTests {
         try await harness.wait("first certificate challenge") { harness.tab.certificateChallenge != nil }
         let first = try #require(harness.tab.certificateChallenge)
         let stale = try #require(harness.tab.certificateDecision)
-        harness.page.reload()
+        try harness.page.load(URLRequest(url: tls.url("/replacement", secure: true)))
         try await harness.wait("replacement certificate challenge") {
             harness.tab.certificateChallenge != nil && harness.tab.certificateChallenge?.id != first.id
         }

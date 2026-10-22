@@ -4,6 +4,7 @@ import Foundation
 
 final class BrowserDownloadTask: NSObject, WKDownloadDelegate {
     let id = UUID()
+    let isResumed: Bool
     var activity: BrowserDownloadActivity?
     var originalURL: URL
     /// Page the download was initiated from, for quarantine provenance.
@@ -22,8 +23,12 @@ final class BrowserDownloadTask: NSObject, WKDownloadDelegate {
 
     private let download: WKDownload
 
-    init(download: WKDownload, originalURL: URL, pageURL: URL? = nil, profileScopeID: String? = nil) {
+    init(
+        download: WKDownload, originalURL: URL, pageURL: URL? = nil,
+        profileScopeID: String? = nil, isResumed: Bool = false
+    ) {
         self.download = download
+        self.isResumed = isResumed
         self.originalURL = originalURL
         self.pageURL = pageURL
         self.profileScopeID = profileScopeID
@@ -54,8 +59,9 @@ final class BrowserDownloadTask: NSObject, WKDownloadDelegate {
         activity?.end(id)
         let once = OnceCompletion(completionHandler)
         download.cancel { [weak self] resumeData in
-            self?.lastResumeData = resumeData
-            once.call(resumeData)
+            let usableData = self?.isResumed == false ? resumeData : nil
+            self?.lastResumeData = usableData
+            once.call(usableData)
         }
     }
 
@@ -92,9 +98,14 @@ final class BrowserDownloadTask: NSObject, WKDownloadDelegate {
     }
 
     func download(_ download: WKDownload, didFailWithError error: Error, resumeData: Data?) {
-        lastResumeData = resumeData
+        // On supported macOS WebKit, resuming an already-resumed transfer
+        // can add the previous Range offset twice (measured by the real
+        // fixture). Never replay that second blob: retry must start fresh
+        // in the SAME session. Opaque resume data is not rewritten by us.
+        let usableData = isResumed ? nil : resumeData
+        lastResumeData = usableData
         activity?.end(id)
-        onFail?(error, resumeData)
+        onFail?(error, usableData)
         clearCallbacks()
     }
 

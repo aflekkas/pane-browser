@@ -50,18 +50,25 @@ struct DownloadFlowTests {
             record.status == .downloading && harness.page.hasActiveDownloads && record.downloadedBytes > 131_072
         }
         harness.manager.cancelDownload(record)
-        try await harness.wait("resumed task is cancellable") { record.resumeData != nil }
+        try await harness.wait("resumed task is cancellable") { harness.manager.canRetryDownload(record) }
         #expect(record.status == .cancelled)
+        // A second WebKit resume blob can double-count the prior Range.
+        // Safely restart in the same private session instead of corrupting bytes.
+        #expect(record.resumeData == nil)
         #expect(!harness.page.hasActiveDownloads)
         harness.manager.retryDownload(record)
         try await harness.wait("resumed finish") { record.status == .completed }
         #expect(record.id == id)
-        #expect(record.destinationURL == destination)
+        let finalDestination = try #require(record.destinationURL)
+        #expect(finalDestination != destination)
         #expect(harness.manager.recentDownloads.count == 1)
-        #expect(try Data(contentsOf: destination) == DownloadFlowFixture.payload)
+        let bytes = try Data(contentsOf: finalDestination)
+        #expect(bytes.count == DownloadFlowFixture.payload.count)
+        #expect(bytes == DownloadFlowFixture.payload)
         #expect(record.quarantineVerified)
-        #expect(DownloadSafety.rawQuarantine(destination)?.isEmpty == false)
-        #expect(fixture.requests.filter { $0.lowercased().contains("range: bytes=") }.count == 2)
+        #expect(DownloadSafety.rawQuarantine(finalDestination)?.isEmpty == false)
+        #expect(fixture.requests.filter { $0.lowercased().contains("range: bytes=") }.count == 1)
+        #expect(fixture.requests.filter { $0.hasPrefix("GET /large ") }.count == 3)
         #expect(!harness.page.hasActiveDownloads)
     }
 
