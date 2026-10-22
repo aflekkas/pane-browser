@@ -118,8 +118,12 @@ final class TabBrowserPageDelegate: BrowserPageDelegate {
         case "mediaEvent":
             handleMediaEventMessage(message.body, for: tab)
         case "passwordManager":
+            // BrowserPage has already validated main-frame + committed
+            // origin for this isolated-world handler. Forward WebKit's
+            // native page URL, never anything the payload claims.
+            guard message.isMainFrame else { return }
             if let body = message.body as? String {
-                passwordCoordinator?.handleMessage(body, pageURL: page.currentURL)
+                passwordCoordinator?.handleMessage(body, pageURL: message.pageURL ?? page.currentURL)
             }
         default:
             break

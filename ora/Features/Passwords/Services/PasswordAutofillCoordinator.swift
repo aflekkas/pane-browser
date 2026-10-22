@@ -70,6 +70,10 @@ struct PasswordFillRequest: Codable {
     let password: String
     let highlightColor: String
     let submitAfterFill: Bool
+    /// Per-document token from the captured `PasswordDocumentContext`. The
+    /// isolated script refuses to write when it does not match its own
+    /// document, so a fill minted before a navigation/reload is inert.
+    let documentToken: String
 }
 
 enum PasswordAutofillSuggestion: Identifiable, Equatable {
@@ -106,6 +110,27 @@ struct PasswordAutofillOverlayState: Equatable {
     let emailSuggestions: [PasswordEmailSuggestion]
     let generatedPassword: String?
     let selectedSuggestionIndex: Int
+    /// Native document binding captured when the overlay was presented.
+    /// Compared (never trusted from JS) again at fill time. Defaulted so
+    /// pure suggestion-resolution constructions stay context-free; only
+    /// the presented overlay carries one, and fills fail closed without it.
+    var fillContext: PasswordDocumentContext?
+
+    init(
+        focus: PasswordBridgeFocusPayload,
+        savedPasswordEntries: [SavedPasswordSummary],
+        emailSuggestions: [PasswordEmailSuggestion],
+        generatedPassword: String?,
+        selectedSuggestionIndex: Int,
+        fillContext: PasswordDocumentContext? = nil
+    ) {
+        self.focus = focus
+        self.savedPasswordEntries = savedPasswordEntries
+        self.emailSuggestions = emailSuggestions
+        self.generatedPassword = generatedPassword
+        self.selectedSuggestionIndex = selectedSuggestionIndex
+        self.fillContext = fillContext
+    }
 
     var suggestions: [PasswordAutofillSuggestion] {
         var items: [PasswordAutofillSuggestion] = []
@@ -129,6 +154,29 @@ struct PasswordSavePromptDetails: Equatable {
     let showsSecurityWarning: Bool
 }
 
+/// Injectable operations for `PasswordAutofillCoordinator.autofill` only,
+/// so tests can control the async authentication delay (and simulate
+/// navigation mid-auth) without OS auth or the Keychain. The defaults
+/// delegate to the shared password service; every other service call the
+/// coordinator makes is unchanged.
+struct PasswordAutofillOperations: Sendable {
+    let authenticate: @Sendable (String) async -> Bool
+    let revealPassword: @Sendable (SavedPasswordSummary) throws -> String
+    let markUsed: @Sendable (SavedPasswordSummary) -> Void
+
+    static let live = PasswordAutofillOperations(
+        authenticate: { reason in
+            await PasswordManagerService.shared.authenticate(reason: reason)
+        },
+        revealPassword: { entry in
+            try PasswordManagerService.shared.revealPassword(for: entry)
+        },
+        markUsed: { entry in
+            PasswordManagerService.shared.markUsed(entry)
+        }
+    )
+}
+
 final class PasswordAutofillCoordinator {
     weak var tab: Tab?
 
@@ -136,11 +184,23 @@ final class PasswordAutofillCoordinator {
     private let providers = PasswordManagerProviderRegistry.shared
     private let settings = SettingsStore.shared
     private let decoder = JSONDecoder()
+    private let operations: PasswordAutofillOperations
 
     private var dismissWorkItem: DispatchWorkItem?
 
-    init(tab: Tab) {
+    init(
+        tab: Tab,
+        authenticate: @escaping @Sendable (String) async -> Bool = PasswordAutofillOperations.live.authenticate,
+        revealPassword: @escaping @Sendable (SavedPasswordSummary) throws -> String = PasswordAutofillOperations.live
+            .revealPassword,
+        markUsed: @escaping @Sendable (SavedPasswordSummary) -> Void = PasswordAutofillOperations.live.markUsed
+    ) {
         self.tab = tab
+        operations = PasswordAutofillOperations(
+            authenticate: authenticate,
+            revealPassword: revealPassword,
+            markUsed: markUsed
+        )
     }
 
     func handleMessage(_ messageBody: String, pageURL: URL?) {
@@ -148,6 +208,19 @@ final class PasswordAutofillCoordinator {
               let message = try? decoder.decode(PasswordBridgeEvent.self, from: data)
         else {
             return
+        }
+
+        // The payload's hostname is page-supplied and untrusted. It must
+        // match the host WebKit natively reports for the page; a mismatch
+        // means a forged or stale (pre-navigation) message — drop it whole.
+        let payloadHostname = message.focus?.hostname ?? message.submit?.hostname
+        if let payloadHostname {
+            guard let pageURL,
+                  let nativeHost = PasswordManagerService.normalizedHost(from: pageURL),
+                  payloadHostname.lowercased() == nativeHost
+            else {
+                return
+            }
         }
 
         switch message.type {
@@ -196,37 +269,53 @@ final class PasswordAutofillCoordinator {
         setOverlayKeyboardActive(true)
     }
 
-    func autofill(_ entry: SavedPasswordSummary, for overlay: PasswordAutofillOverlayState) {
+    @discardableResult
+    func autofill(
+        _ entry: SavedPasswordSummary,
+        for overlay: PasswordAutofillOverlayState
+    ) -> Task<Void, Never> {
         Task { [weak self] in
             guard let self else { return }
 
-            let authenticated = await self.passwordManager.authenticate(
-                reason: "Autofill the saved password for \(entry.displayUsername) on \(entry.host)"
+            let authenticated = await operations.authenticate(
+                "Autofill the saved password for \(entry.displayUsername) on \(entry.host)"
             )
             guard authenticated,
-                  let password = try? self.passwordManager.revealPassword(for: entry)
+                  let password = try? operations.revealPassword(entry)
             else {
                 return
             }
 
             await MainActor.run {
+                // Re-validate after the async auth prompt: if the tab
+                // navigated away from the overlay's origin, the credential
+                // must not follow it.
+                guard self.isFillContextValid(for: overlay) else {
+                    self.clearAutofillState()
+                    return
+                }
                 let request = PasswordFillRequest(
                     usernameFieldID: overlay.focus.usernameFieldID,
                     passwordFieldIDs: overlay.focus.passwordFieldIDs,
                     username: entry.username.isEmpty ? nil : entry.username,
                     password: password,
                     highlightColor: "#E8F5E9",
-                    submitAfterFill: overlay.focus.action == .login && self.settings.passwordAutofillSubmitEnabled
+                    submitAfterFill: overlay.focus.action == .login && self.settings.passwordAutofillSubmitEnabled,
+                    documentToken: overlay.fillContext?.documentToken ?? ""
                 )
 
                 self.evaluate(scriptMethod: "fillCredentials", payload: request)
-                self.passwordManager.markUsed(entry)
+                self.operations.markUsed(entry)
                 self.dismissOverlay()
             }
         }
     }
 
     func fillGeneratedPassword(for overlay: PasswordAutofillOverlayState) {
+        guard isFillContextValid(for: overlay) else {
+            clearAutofillState()
+            return
+        }
         guard let generatedPassword = overlay.generatedPassword else {
             return
         }
@@ -241,7 +330,8 @@ final class PasswordAutofillCoordinator {
             username: nil,
             password: generatedPassword,
             highlightColor: "#FFF4CC",
-            submitAfterFill: false
+            submitAfterFill: false,
+            documentToken: overlay.fillContext?.documentToken ?? ""
         )
 
         evaluate(scriptMethod: "fillCredentials", payload: request)
@@ -249,6 +339,10 @@ final class PasswordAutofillCoordinator {
     }
 
     func fillEmailSuggestion(_ suggestion: PasswordEmailSuggestion, for overlay: PasswordAutofillOverlayState) {
+        guard isFillContextValid(for: overlay) else {
+            clearAutofillState()
+            return
+        }
         guard overlay.focus.fieldKind == .email else {
             return
         }
@@ -263,16 +357,12 @@ final class PasswordAutofillCoordinator {
             username: suggestion.email,
             password: "",
             highlightColor: "#E8F1FF",
-            submitAfterFill: false
+            submitAfterFill: false,
+            documentToken: overlay.fillContext?.documentToken ?? ""
         )
 
         evaluate(scriptMethod: "fillCredentials", payload: request)
         dismissOverlay()
-    }
-
-    func updateSelection(to index: Int, for overlay: PasswordAutofillOverlayState) {
-        let boundedIndex = boundedSelectionIndex(index, for: overlay)
-        applySelectionIndex(boundedIndex, forFieldID: overlay.focus.fieldID)
     }
 
     @MainActor
@@ -322,7 +412,8 @@ final class PasswordAutofillCoordinator {
             savedPasswordEntries: suggestions.savedPasswordEntries,
             emailSuggestions: suggestions.emailSuggestions,
             generatedPassword: suggestions.generatedPassword,
-            selectedSuggestionIndex: suggestions.selectedSuggestionIndex
+            selectedSuggestionIndex: suggestions.selectedSuggestionIndex,
+            fillContext: tab?.browserPage?.currentPasswordContext()
         )
 
         tab?.passwordTriggerOverlayState = overlayState
@@ -475,7 +566,8 @@ final class PasswordAutofillCoordinator {
             savedPasswordEntries: overlay.savedPasswordEntries,
             emailSuggestions: overlay.emailSuggestions,
             generatedPassword: overlay.generatedPassword,
-            selectedSuggestionIndex: overlay.selectedSuggestionIndex
+            selectedSuggestionIndex: overlay.selectedSuggestionIndex,
+            fillContext: overlay.fillContext
         )
     }
 
@@ -488,7 +580,8 @@ final class PasswordAutofillCoordinator {
             savedPasswordEntries: overlay.savedPasswordEntries,
             emailSuggestions: overlay.emailSuggestions,
             generatedPassword: overlay.generatedPassword,
-            selectedSuggestionIndex: selectionIndex
+            selectedSuggestionIndex: selectionIndex,
+            fillContext: overlay.fillContext
         )
     }
 
@@ -504,71 +597,26 @@ final class PasswordAutofillCoordinator {
             window.__oraPasswordManager.\(scriptMethod)(\(payloadString));
         }
         """
-        tab?.evaluateJavaScript(script)
+        tab?.evaluatePasswordJavaScript(script)
+    }
+
+    /// Exact-context re-check at fill time (called again after the async
+    /// auth prompt in `autofill`): the same BrowserPage instance must still
+    /// show the same document — same generation, full origin, URL, and
+    /// isolated-world token — that the overlay was captured against.
+    /// Clearing the overlay alone is not the guard; this equality is.
+    private func isFillContextValid(for overlay: PasswordAutofillOverlayState) -> Bool {
+        guard let captured = overlay.fillContext,
+              let current = tab?.browserPage?.currentPasswordContext()
+        else {
+            return false
+        }
+        return captured == current
     }
 
     private func setOverlayKeyboardActive(_ isActive: Bool) {
         guard tab?.browserPage != nil else { return }
         evaluate(scriptMethod: "setOverlayKeyboardActive", payload: isActive)
-    }
-
-    private func handleKeyCommand(_ command: PasswordAutofillKeyCommand) {
-        switch command {
-        case .moveUp:
-            moveSelection(by: -1)
-        case .moveDown:
-            moveSelection(by: 1)
-        case .activate:
-            activateCurrentSelection()
-        case .dismiss:
-            dismissOverlay()
-        }
-    }
-
-    func moveSelection(by delta: Int) {
-        guard let overlay = tab?.passwordOverlayState else { return }
-        let suggestionCount = overlay.suggestions.count
-        guard suggestionCount > 0 else { return }
-
-        let nextIndex = min(max(overlay.selectedSuggestionIndex + delta, 0), suggestionCount - 1)
-        applySelectionIndex(nextIndex, forFieldID: overlay.focus.fieldID)
-    }
-
-    func activateCurrentSelection() {
-        guard let overlay = tab?.passwordOverlayState,
-              overlay.suggestions.indices.contains(overlay.selectedSuggestionIndex)
-        else {
-            return
-        }
-
-        switch overlay.suggestions[overlay.selectedSuggestionIndex] {
-        case .generatedPassword:
-            fillGeneratedPassword(for: overlay)
-        case let .savedCredential(entry):
-            autofill(entry, for: overlay)
-        case let .email(suggestion):
-            fillEmailSuggestion(suggestion, for: overlay)
-        }
-    }
-
-    private func applySelectionIndex(_ selectionIndex: Int, forFieldID fieldID: String) {
-        if let overlay = tab?.passwordOverlayState,
-           overlay.focus.fieldID == fieldID
-        {
-            tab?.passwordOverlayState = overlayState(overlay, updatingSelectionIndexTo: selectionIndex)
-        }
-
-        if let triggerOverlay = tab?.passwordTriggerOverlayState,
-           triggerOverlay.focus.fieldID == fieldID
-        {
-            tab?.passwordTriggerOverlayState = overlayState(triggerOverlay, updatingSelectionIndexTo: selectionIndex)
-        }
-    }
-
-    private func boundedSelectionIndex(_ selectionIndex: Int, for overlay: PasswordAutofillOverlayState) -> Int {
-        let suggestionCount = overlay.suggestions.count
-        guard suggestionCount > 0 else { return -1 }
-        return min(max(selectionIndex, 0), suggestionCount - 1)
     }
 
     static func savePromptDetails(
@@ -644,5 +692,73 @@ final class PasswordAutofillCoordinator {
             selectedSuggestionIndex: (savedPasswordEntries.isEmpty && filteredEmailSuggestions
                 .isEmpty && filteredGeneratedPassword == nil) ? -1 : 0
         )
+    }
+}
+
+// MARK: - Overlay keyboard selection
+
+extension PasswordAutofillCoordinator {
+    func updateSelection(to index: Int, for overlay: PasswordAutofillOverlayState) {
+        let boundedIndex = boundedSelectionIndex(index, for: overlay)
+        applySelectionIndex(boundedIndex, forFieldID: overlay.focus.fieldID)
+    }
+
+    private func handleKeyCommand(_ command: PasswordAutofillKeyCommand) {
+        switch command {
+        case .moveUp:
+            moveSelection(by: -1)
+        case .moveDown:
+            moveSelection(by: 1)
+        case .activate:
+            activateCurrentSelection()
+        case .dismiss:
+            dismissOverlay()
+        }
+    }
+
+    func moveSelection(by delta: Int) {
+        guard let overlay = tab?.passwordOverlayState else { return }
+        let suggestionCount = overlay.suggestions.count
+        guard suggestionCount > 0 else { return }
+
+        let nextIndex = min(max(overlay.selectedSuggestionIndex + delta, 0), suggestionCount - 1)
+        applySelectionIndex(nextIndex, forFieldID: overlay.focus.fieldID)
+    }
+
+    func activateCurrentSelection() {
+        guard let overlay = tab?.passwordOverlayState,
+              overlay.suggestions.indices.contains(overlay.selectedSuggestionIndex)
+        else {
+            return
+        }
+
+        switch overlay.suggestions[overlay.selectedSuggestionIndex] {
+        case .generatedPassword:
+            fillGeneratedPassword(for: overlay)
+        case let .savedCredential(entry):
+            autofill(entry, for: overlay)
+        case let .email(suggestion):
+            fillEmailSuggestion(suggestion, for: overlay)
+        }
+    }
+
+    private func applySelectionIndex(_ selectionIndex: Int, forFieldID fieldID: String) {
+        if let overlay = tab?.passwordOverlayState,
+           overlay.focus.fieldID == fieldID
+        {
+            tab?.passwordOverlayState = overlayState(overlay, updatingSelectionIndexTo: selectionIndex)
+        }
+
+        if let triggerOverlay = tab?.passwordTriggerOverlayState,
+           triggerOverlay.focus.fieldID == fieldID
+        {
+            tab?.passwordTriggerOverlayState = overlayState(triggerOverlay, updatingSelectionIndexTo: selectionIndex)
+        }
+    }
+
+    private func boundedSelectionIndex(_ selectionIndex: Int, for overlay: PasswordAutofillOverlayState) -> Int {
+        let suggestionCount = overlay.suggestions.count
+        guard suggestionCount > 0 else { return -1 }
+        return min(max(selectionIndex, 0), suggestionCount - 1)
     }
 }

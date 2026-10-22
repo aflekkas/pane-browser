@@ -15,11 +15,22 @@
         active: false
     };
 
+    // Per-document token: a fresh document (navigation or reload) gets a
+    // fresh token, so native code can tell this document's messages and
+    // fills from a queued predecessor's. Announced once at install via
+    // bridgeReady; native registers it against its navigation generation.
+    const documentToken = window.crypto && window.crypto.randomUUID
+        ? window.crypto.randomUUID()
+        : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+
     function send(payload) {
         try {
+            payload.documentToken = documentToken;
             handler.postMessage(JSON.stringify(payload));
         } catch (error) {}
     }
+
+    send({ type: "bridgeReady" });
 
     function ensureFieldID(element) {
         if (!element) {
@@ -379,6 +390,12 @@
     window.__oraPasswordManager = {
         fillCredentials(payload) {
             const request = typeof payload === "string" ? JSON.parse(payload) : payload;
+            // Bind the fill to this exact document: a request minted for a
+            // previous document (navigation/reload since the overlay was
+            // shown) must not write into this one.
+            if (!request.documentToken || request.documentToken !== documentToken) {
+                return;
+            }
             const highlightColor = request.highlightColor || "#E8F5E9";
 
             if (request.usernameFieldID && typeof request.username === "string") {
@@ -397,6 +414,12 @@
             overlayKeyboardNavigationState.active = typeof payload === "string"
                 ? JSON.parse(payload)
                 : Boolean(payload);
+        },
+        // Re-announce this document's token after a failed/cancelled
+        // navigation: the document survives, but native retired its
+        // registration when the provisional navigation started.
+        reannounce() {
+            send({ type: "bridgeReady" });
         }
     };
 

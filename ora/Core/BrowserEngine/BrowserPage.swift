@@ -7,6 +7,7 @@ final class BrowserPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
 
     private let webView: WKWebView
     private let messageNames: [String]
+    private let isolatedMessageNames: Set<String>
     private var originalURL: URL?
     private(set) var lastCommittedURL: URL?
     private(set) var isDownloadNavigation = false
@@ -14,6 +15,14 @@ final class BrowserPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
     private var isReadyForNavigation = false
     private var pendingLoadRequest: URLRequest?
     private var pendingReload = false
+    /// Password-bridge per-document state (generation, token, tracked
+    /// document URL). See `PasswordDocumentTracker`.
+    let passwordTracker = PasswordDocumentTracker()
+    private var urlObservation: NSKeyValueObservation?
+
+    var passwordNavigationGeneration: Int {
+        passwordTracker.generation
+    }
 
     init(
         profile: BrowserEngineProfile,
@@ -50,21 +59,31 @@ final class BrowserPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
         let contentController = WKUserContentController()
         webConfiguration.userContentController = contentController
         messageNames = configuration.scriptMessageNames
+        isolatedMessageNames = configuration.isolatedScriptMessageNames
         webView = WKWebView(frame: .zero, configuration: webConfiguration)
         self.delegate = delegate
 
         super.init()
 
         for messageName in configuration.scriptMessageNames {
-            contentController.add(self, name: messageName)
+            if isolatedMessageNames.contains(messageName) {
+                contentController.add(self, contentWorld: PasswordBridge.world, name: messageName)
+            } else {
+                contentController.add(self, name: messageName)
+            }
         }
         for script in configuration.userScripts {
             let userScript = WKUserScript(
                 source: script.source,
                 injectionTime: mapInjectionTime(script.injectionTime),
-                forMainFrameOnly: script.forMainFrameOnly
+                forMainFrameOnly: script.forMainFrameOnly,
+                in: script.contentWorld.wkContentWorld
             )
             contentController.addUserScript(userScript)
+        }
+
+        urlObservation = webView.observe(\.url, options: [.new]) { [weak self] webView, _ in
+            self?.passwordTracker.noteRouteChange(to: webView.url)
         }
 
         webView.navigationDelegate = self
@@ -155,6 +174,21 @@ final class BrowserPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
         webView.evaluateJavaScript(script, completionHandler: completion)
     }
 
+    /// Evaluate in the isolated password-bridge world. This is the only path
+    /// allowed to touch `window.__oraPasswordManager`; page-world evaluation
+    /// of that global would silently fail (and must never be re-pointed at
+    /// the page world, which would hand fill to arbitrary page script).
+    func evaluatePasswordJavaScript(_ script: String, completion: ((Any?, Error?) -> Void)? = nil) {
+        webView.evaluateJavaScript(script, in: nil, in: PasswordBridge.world) { result in
+            switch result {
+            case let .success(value):
+                completion?(value, nil)
+            case let .failure(error):
+                completion?(nil, error)
+            }
+        }
+    }
+
     func takeSnapshot(
         configuration: BrowserSnapshotConfiguration,
         completion: @escaping (NSImage?, Error?) -> Void
@@ -171,14 +205,54 @@ final class BrowserPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
         webView.closeAllMediaPresentations(completionHandler: completion)
     }
 
+    /// Current password-bridge document context, or `nil` when no document
+    /// has registered (fail closed). Equality covers page instance,
+    /// generation, full origin, document URL, and document token.
+    func currentPasswordContext() -> PasswordDocumentContext? {
+        passwordTracker.context(
+            pageIdentity: ObjectIdentifier(self),
+            fallbackURL: webView.url ?? lastCommittedURL
+        )
+    }
+
+    /// Re-handshake after a failed/cancelled provisional navigation: the
+    /// previous document survives, but provisional start already retired
+    /// its token, and its script only announces at installation. Ask the
+    /// surviving isolated document to re-announce so fresh focus/fill can
+    /// register a new context (at the new generation — fills captured
+    /// before the navigation stay invalid). No-op when no committed
+    /// document survives.
+    private func rehandshakeSurvivingPasswordDocument() {
+        // Compare against the tracker's surviving document URL, not
+        // `lastCommittedURL`: after an SPA pushState/replaceState the
+        // committed URL is stale (/login) while the surviving document
+        // legitimately sits on the tracked route (/other). Generation
+        // was already bumped at provisional start, so old fills stay
+        // invalid; only the fresh document context is re-registered.
+        guard passwordTracker.canRehandshake(committedURL: passwordTracker.currentDocumentURL, currentURL: webView.url)
+        else {
+            return
+        }
+        evaluatePasswordJavaScript(
+            "window.__oraPasswordManager && window.__oraPasswordManager.reannounce && window.__oraPasswordManager.reannounce();"
+        )
+    }
+
     func teardown() {
+        passwordTracker.invalidate()
+        urlObservation?.invalidate()
+        urlObservation = nil
         webView.stopLoading()
         webView.navigationDelegate = nil
         webView.uiDelegate = nil
         let controller = webView.configuration.userContentController
         controller.removeAllUserScripts()
         for messageName in messageNames {
-            controller.removeScriptMessageHandler(forName: messageName)
+            if isolatedMessageNames.contains(messageName) {
+                controller.removeScriptMessageHandler(forName: messageName, contentWorld: PasswordBridge.world)
+            } else {
+                controller.removeScriptMessageHandler(forName: messageName)
+            }
         }
         webView.removeFromSuperview()
     }
@@ -234,9 +308,31 @@ final class BrowserPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
     }
 
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        let frameURL = message.frameInfo.request.url
+        if isolatedMessageNames.contains(message.name) {
+            // Privileged bridge: the tracker registers bridgeReady tokens
+            // and validates against WebKit's own frame facts plus the
+            // registered document context, never the payload's claims.
+            guard passwordTracker.shouldForwardMessage(
+                isMainFrame: message.frameInfo.isMainFrame,
+                frameURL: frameURL,
+                pageURL: webView.url,
+                committedURL: lastCommittedURL,
+                body: message.body,
+                pageIdentity: ObjectIdentifier(self)
+            ) else {
+                return
+            }
+        }
         delegate?.browserPage(
             self,
-            didReceiveScriptMessage: BrowserScriptMessage(name: message.name, body: message.body)
+            didReceiveScriptMessage: BrowserScriptMessage(
+                name: message.name,
+                body: message.body,
+                isMainFrame: message.frameInfo.isMainFrame,
+                frameURL: frameURL,
+                pageURL: webView.url
+            )
         )
     }
 
@@ -264,6 +360,10 @@ final class BrowserPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
     }
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+        // Any new navigation — including same-URL reload — retires the
+        // previous document for password purposes immediately, while the
+        // navigation is still in progress.
+        passwordTracker.invalidate()
         if !isDownloadNavigation {
             originalURL = lastCommittedURL
             emitNavigationEvent(
@@ -279,6 +379,7 @@ final class BrowserPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
         if !isDownloadNavigation {
             lastCommittedURL = webView.url
+            passwordTracker.commitDocument(url: webView.url)
             emitNavigationEvent(
                 phase: .committed,
                 url: webView.url,
@@ -292,6 +393,7 @@ final class BrowserPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         if !isDownloadNavigation {
             lastCommittedURL = webView.url
+            passwordTracker.commitDocument(url: webView.url)
             emitNavigationEvent(
                 phase: .finished,
                 url: webView.url,
@@ -320,6 +422,7 @@ final class BrowserPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
         if !handleCancelledNavigationError(error) {
             delegate?.browserPage(self, didFailNavigationWith: error, failingURL: webView.url)
         }
+        rehandshakeSurvivingPasswordDocument()
         originalURL = nil
     }
 
@@ -338,9 +441,13 @@ final class BrowserPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
         )
 
         if handleCancelledNavigationError(error) {
+            // Cancelled (e.g. stopLoading before commit): the committed
+            // document survives and must be able to re-handshake.
+            rehandshakeSurvivingPasswordDocument()
             return
         }
 
+        rehandshakeSurvivingPasswordDocument()
         let nsError = error as NSError
         let failingURL = nsError.userInfo[NSURLErrorFailingURLErrorKey] as? URL ?? webView.url
         delegate?.browserPage(self, didFailNavigationWith: error, failingURL: failingURL)

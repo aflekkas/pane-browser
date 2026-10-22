@@ -119,6 +119,10 @@ targets:
         MARKETING_VERSION: 0.2.14
         CURRENT_PROJECT_VERSION: 105
         PRODUCT_NAME: Pane
+        # The product is Pane.app, but the Swift module stays `Ora` so
+        # `@testable import Ora` in oraTests resolves. Without this the
+        # module follows PRODUCT_NAME and every test file fails to build.
+        PRODUCT_MODULE_NAME: Ora
         PRODUCT_BUNDLE_IDENTIFIER: com.aflekkas.pane
         GENERATE_INFOPLIST_FILE: YES
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor

@@ -3,6 +3,7 @@ import Foundation
 import SwiftData
 import SwiftUI
 
+@MainActor
 class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Disable automatic window tabbing for all NSWindow instances
@@ -39,14 +40,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         return WindowFactory.makeMainWindow(rootView: OraRoot())
     }
 
+    /// Delivery registry for external URLs. Injectable for tests.
+    var urlRegistry = BrowserURLRecipientRegistry.shared
+
+    /// Creates a browser window when a URL arrives with no ready
+    /// recipient. Injectable for tests; production uses WindowFactory.
+    var browserWindowFactory: () -> Void = {
+        _ = WindowFactory.makeMainWindow(rootView: OraRoot())
+    }
+
     func handleIncomingURLs(_ urls: [URL]) {
-        let window = getWindow()!
-        for url in urls {
-            let userInfo: [AnyHashable: Any] = ["url": url]
-            DispatchQueue.main.async {
-                NotificationCenter.default.post(name: .openURL, object: window, userInfo: userInfo)
-            }
-        }
+        urlRegistry.deliver(urls, needsWindow: browserWindowFactory)
     }
 }
 
