@@ -175,7 +175,7 @@ struct OraCommands: Commands {
         }
 
         CommandGroup(replacing: .appInfo) {
-            Button("About Ora") { showAboutWindow() }
+            Button("About Pane") { showAboutWindow() }
             Button("Check for Updates") {
                 NotificationCenter.default.post(
                     name: .checkForUpdates,
@@ -196,7 +196,7 @@ struct OraCommands: Commands {
 
     private func showAboutWindow() {
         let alert = NSAlert()
-        alert.messageText = "Ora Browser"
+        alert.messageText = "Pane Browser"
         alert.informativeText = """
         Version \(getAppVersion())
 

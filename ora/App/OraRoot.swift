@@ -156,7 +156,7 @@ struct OraRoot: View {
                         return
                     }
                     dialogManager.confirm(
-                        title: "Quit Ora?",
+                        title: "Quit Pane?",
                         message: "Are you sure you want to quit?",
                         iconImage: Image("OraColorLogo"),
                         confirmLabel: "Quit",

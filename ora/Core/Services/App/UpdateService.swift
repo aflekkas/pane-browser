@@ -21,7 +21,19 @@ class UpdateService: NSObject, ObservableObject {
         setupUpdater()
     }
 
+    /// Pane: the update feed comes from Info.plist (SUFeedURL). With no feed configured,
+    /// the updater never starts, so a fork cannot update itself into upstream Ora.
+    static var feedURL: String? {
+        guard let url = Bundle.main.object(forInfoDictionaryKey: "SUFeedURL") as? String,
+              !url.isEmpty else { return nil }
+        return url
+    }
+
     private func setupUpdater() {
+        guard Self.feedURL != nil else {
+            logger.info("No SUFeedURL configured; updates disabled")
+            return
+        }
         let hostBundle = Bundle.main
         let applicationBundle = hostBundle
         let userDriver = SPUStandardUserDriver(hostBundle: hostBundle, delegate: nil)
@@ -81,7 +93,7 @@ class UpdateService: NSObject, ObservableObject {
 
 extension UpdateService: SPUUpdaterDelegate {
     func feedURLString(for updater: SPUUpdater) -> String? {
-        return "https://the-ora.github.io/browser/appcast.xml"
+        return Self.feedURL
     }
 
     func updater(_ updater: SPUUpdater, didFindValidUpdate item: SUAppcastItem) {

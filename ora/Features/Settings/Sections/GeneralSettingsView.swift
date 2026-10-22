@@ -11,7 +11,7 @@ struct GeneralSettingsView: View {
         SettingsSection {
             SettingsCard {
                 HStack {
-                    Text("Ora Browser")
+                    Text("Pane Browser")
                         .font(.headline)
                     Spacer()
                     Text(getAppVersion())
@@ -27,7 +27,7 @@ struct GeneralSettingsView: View {
             if !defaultBrowserManager.isDefault {
                 SettingsCard {
                     HStack {
-                        Text("Born for your Mac. Make Ora your default browser.")
+                        Text("Born for your Mac. Make Pane your default browser.")
                         Spacer()
                         Button("Set as Default") { DefaultBrowserManager.requestSetAsDefault() }
                     }

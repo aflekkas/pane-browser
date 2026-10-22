@@ -59,7 +59,7 @@ struct URLBar: View {
 
     private func shareCurrentPage(tab: Tab, sourceView: NSView, sourceRect: NSRect) {
         let url = tab.url
-        let title = tab.title.isEmpty ? "Shared from Ora" : tab.title
+        let title = tab.title.isEmpty ? "Shared from Pane" : tab.title
         let items: [Any] = [title, url]
         let picker = NSSharingServicePicker(items: items)
         picker.delegate = nil

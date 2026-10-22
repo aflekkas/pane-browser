@@ -73,7 +73,7 @@ final class PasswordManagerService: ObservableObject {
     @Published private(set) var entries: [SavedPasswordSummary] = []
     @Published private(set) var lastErrorMessage: String?
 
-    private let serviceName = "com.orabrowser.app.passwords"
+    private let serviceName = "com.aflekkas.pane.passwords"
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
 
@@ -648,9 +648,9 @@ enum PasswordManagerError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .invalidStoredPassword:
-            return "Ora couldn't decode the stored password."
+            return "Pane couldn't decode the stored password."
         case .invalidCredentialOrigin:
-            return "Ora can only save passwords for web origins."
+            return "Pane can only save passwords for web origins."
         case let .keychainStatus(status):
             if let message = SecCopyErrorMessageString(status, nil) as String? {
                 return message

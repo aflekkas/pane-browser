@@ -181,7 +181,7 @@ struct DownloadHistoryRow: View {
                     downloadManager.deleteDownload(download)
                 }
             } label: {
-                Label("Remove from Ora", systemImage: "minus.circle")
+                Label("Remove from Pane", systemImage: "minus.circle")
             }
         }
     }

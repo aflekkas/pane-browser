@@ -16,7 +16,7 @@ final class ContentBlockerArtifactStore {
         self.fileManager = fileManager
         self.baseURL = baseURL ?? fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask)
             .first!
-            .appendingPathComponent("Ora", isDirectory: true)
+            .appendingPathComponent("Pane", isDirectory: true)
             .appendingPathComponent("ContentBlockers", isDirectory: true)
 
         try? fileManager.createDirectory(at: self.baseURL, withIntermediateDirectories: true, attributes: nil)

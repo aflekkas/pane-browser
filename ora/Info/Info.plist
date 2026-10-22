@@ -61,7 +61,7 @@
 			<key>CFBundleTypeRole</key>
 			<string>Editor</string>
 			<key>CFBundleURLName</key>
-			<string>Ora Browser</string>
+			<string>Pane</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
 				<string>http</string>
@@ -86,12 +86,8 @@
 		<string>NSUserActivityTypeBrowsingWeb</string>
 	</array>
 	<key>SUEnableAutomaticChecks</key>
-	<true/>
+	<false/>
 	<key>SUEnableInstallerLauncherService</key>
 	<true/>
-	<key>SUFeedURL</key>
-	<string>https://the-ora.github.io/browser/appcast.xml</string>
-	<key>SUPublicEDKey</key>
-	<string>Ozj+rezzbJAD76RfajtfQ7rFojJbpFSCl/0DcFSBCTI=</string>
 </dict>
 </plist>
