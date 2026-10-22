@@ -32,6 +32,7 @@ struct OraRoot: View {
     let downloadContext: ModelContext
     @State private var window: NSWindow?
     @State private var urlRecipientToken: UUID?
+    @State private var isURLRecipientReady = false
 
     init(isPrivate: Bool = false) {
         _privacyMode = StateObject(wrappedValue: PrivacyMode(isPrivate: isPrivate))
@@ -113,18 +114,8 @@ struct OraRoot: View {
             .onAppear {
                 downloadManager.toastManager = toastManager
 
-                // Register as the ready recipient for external URLs.
-                // Registration drains anything queued before this window
-                // existed, after the recipient (this root) is in place.
-                urlRecipientToken = BrowserURLRecipientRegistry.shared.register { url in
-                    tabManager.openTab(
-                        url: url,
-                        historyManager: historyManager,
-                        downloadManager: downloadManager,
-                        focusAfterOpening: true,
-                        isPrivate: privacyMode.isPrivate
-                    )
-                }
+                isURLRecipientReady = true
+                registerURLRecipient()
                 Task {
                     let containerIDs = await MainActor.run {
                         (try? tabContext.fetch(FetchDescriptor<TabContainer>()))?.map(\.id) ?? []
@@ -355,11 +346,35 @@ struct OraRoot: View {
                         }
                     }
             }
+            .onChange(of: window) { _, _ in
+                registerURLRecipient()
+            }
             .onDisappear {
+                isURLRecipientReady = false
                 if let urlRecipientToken {
                     BrowserURLRecipientRegistry.shared.unregister(token: urlRecipientToken)
                 }
                 urlRecipientToken = nil
             }
+    }
+
+    private func registerURLRecipient() {
+        if let urlRecipientToken {
+            BrowserURLRecipientRegistry.shared.unregister(token: urlRecipientToken)
+            self.urlRecipientToken = nil
+        }
+        // WindowReader resolves asynchronously; onAppear alone is not readiness.
+        guard isURLRecipientReady, let window else { return }
+        let handler = { [weak tabManager, weak historyManager, weak downloadManager, weak privacyMode] (url: URL) in
+            guard let tabManager, let historyManager, let downloadManager, let privacyMode else { return }
+            tabManager.openTab(
+                url: url,
+                historyManager: historyManager,
+                downloadManager: downloadManager,
+                focusAfterOpening: true,
+                isPrivate: privacyMode.isPrivate
+            )
+        }
+        urlRecipientToken = BrowserURLRecipientRegistry.shared.register(window: window, handler: handler)
     }
 }
